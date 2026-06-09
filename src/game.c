@@ -14,6 +14,19 @@ void gameInit(void) {
     curJ = 3; /* board center vertex */
 }
 
+/* The cursor only visits "star" vertices - interior hinges where all six
+ * ring triangles are on the board (no phantom slots). Rim vertices are
+ * technically spinnable (the web game's edge-inflow mechanic) but look like
+ * the cursor is parked on the border, so they're excluded here. */
+static u8 isStar(u8 k, u8 j) {
+    u8 i;
+    if (!vertexValid[j][k]) return 0;
+    for (i = 0; i < 6; i++) {
+        if (phantomColor[j][k][i] != NO_CELL) return 0;
+    }
+    return 1;
+}
+
 /* Score a candidate move: primary axis distance dominates, the off-axis
  * drift breaks ties so the cursor tracks straight lines when it can. */
 static void moveCursor(u8 dir) {
@@ -23,7 +36,7 @@ static void moveCursor(u8 dir) {
     for (j = 0; j < VTX_ROWS; j++) {
         for (k = 0; k < VTX_COLS; k++) {
             s16 dx, dy, ax, ay, score;
-            if (!vertexValid[j][k]) continue;
+            if (!isStar(k, j)) continue;
             dx = (s16)k - curK;
             dy = (s16)j - curJ;
             ax = dx < 0 ? -dx : dx;
