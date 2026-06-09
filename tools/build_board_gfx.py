@@ -175,8 +175,9 @@ def main():
     pal_rgb += [(0, 0, 0), (255, 255, 255), (96, 96, 96)]
 
     # ---- tiles: one graphic per (struct, color combo), dedup with flips ----
-    tiles = [bytes(64)]               # tile 0 = blank
-    tile_lookup = {bytes(64): (0, 0)} # pixels -> (tile id, flip bits)
+    tiles = [bytes(64)]                # tile 0 = blank
+    canonical = {bytes(64): 0}         # stored tile pixels -> tile id
+    tile_lookup = {bytes(64): (0, 0)}  # memo: any queried pixels -> (tile id, flips)
 
     def graphic(key, ca, cb):
         px = bytearray(64)
@@ -200,16 +201,20 @@ def main():
         return bytes(p[(7 - y) * 8 + x] for y in range(8) for x in range(8))
 
     def tile_for(p):
+        # Flip matching must run against CANONICAL stored tiles only: an
+        # aliased entry's pixels are themselves a flip of some tile, so
+        # composing its flip bits with ours would double-flip.
         if p in tile_lookup:
             return tile_lookup[p]
         h, v = hflip(p), vflip(p)
-        for q, flips in ((h, 0x4000), (v, 0x8000), (vflip(h), 0xC000)):
-            if q in tile_lookup:
-                tid, _ = tile_lookup[q]
+        for q, flips in ((p, 0), (h, 0x4000), (v, 0x8000), (vflip(h), 0xC000)):
+            if q in canonical:
+                tid = canonical[q]
                 tile_lookup[p] = (tid, flips)
                 return tid, flips
         tid = len(tiles)
         tiles.append(p)
+        canonical[p] = tid
         tile_lookup[p] = (tid, 0)
         return tid, 0
 
@@ -339,6 +344,40 @@ const u8 triCellXY[{len(tri_cell_xy)}] = {{
 """
     (ROOT / "include/boardtab.h").write_text(h)
     (ROOT / "src/boardtab.c").write_text(c)
+
+    # ---- cursor sprite: 16x16 ring marker (OBJ 4bpp) ----
+    # Emitted as 4 tiles [TL, TR, BL, BR]; the runtime DMAs TL/TR to the OBJ
+    # base and BL/BR to base + 0x100 words so a 16x16 sprite at tile 0 works.
+    cur = [[0] * 16 for _ in range(16)]
+    for y in range(16):
+        for x in range(16):
+            d2 = (x - 7.5) ** 2 + (y - 7.5) ** 2
+            if 27.0 <= d2 <= 56.0:
+                cur[y][x] = 1  # white ring
+            elif 18.0 <= d2 < 27.0 or 56.0 < d2 <= 68.0:
+                cur[y][x] = 2  # grey halo
+    cpix = bytearray()
+    for ty2, tx2 in ((0, 0), (0, 1), (1, 0), (1, 1)):
+        planes = bytearray(32)
+        for y in range(8):
+            b0 = b1 = 0
+            for x in range(8):
+                c = cur[ty2 * 8 + y][tx2 * 8 + x]
+                bit = 0x80 >> x
+                if c & 1:
+                    b0 |= bit
+                if c & 2:
+                    b1 |= bit
+            planes[y * 2] = b0
+            planes[y * 2 + 1] = b1
+        cpix += planes
+    (ROOT / "res/cursor.pic").write_bytes(cpix)
+    cpal = bytearray(32)
+    for i, (r, g, b) in enumerate([(0, 0, 0), (255, 255, 255), (140, 140, 160)]):
+        w = (b >> 3) << 10 | (g >> 3) << 5 | (r >> 3)
+        cpal[i * 2] = w & 0xFF
+        cpal[i * 2 + 1] = w >> 8
+    (ROOT / "res/cursor.pal").write_bytes(cpal)
 
     # ---- preview PNG (random colors, 3x) ----
     from PIL import Image
