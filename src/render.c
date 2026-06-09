@@ -23,7 +23,6 @@ void renderInit(void) {
     setPalette((u8 *)&board_pal, 0, 16 * 2);
     bgSetGfxPtr(0, VRAM_BG1_TILES);
     bgSetMapPtr(0, VRAM_BG1_MAP, SC_32x32);
-    bgSetScroll(0, 0, BOARD_VOFS);
 
     /* OBJ: cursor ring, 16x16 at tile 0 (TL/TR row 0, BL/BR row 1). */
     dmaCopyVram((u8 *)&cursor_pic, VRAM_OBJ_TILES, 64);
@@ -69,6 +68,9 @@ void boardRebuildMap(void) {
 }
 
 void renderVBlank(void) {
+    /* Re-assert scroll every frame: setMode() resets BG offsets, and this
+     * also survives any future mode/screen transitions. */
+    bgSetScroll(0, 0, BOARD_VOFS);
     if (mapDirty) {
         dmaCopyVram((u8 *)mapBuf, VRAM_BG1_MAP, 0x800);
         mapDirty = 0;
@@ -77,7 +79,7 @@ void renderVBlank(void) {
 
 void cursorUpdate(u8 k, u8 j, u8 frame) {
     u16 x = VTX_PX_X(k) - 8;
-    u16 y = VTX_PX_Y(j) - 8;
+    u16 y = VTX_PX_Y(j) - 8 - 1; /* OAM sprites display one line low */
     oamSet(OAM_CURSOR, x, y, 3, 0, 0, 0, 0);
     oamSetEx(OAM_CURSOR, OBJ_SMALL, OBJ_SHOW);
     /* gentle blink: ~0.7s on, ~0.2s off */
