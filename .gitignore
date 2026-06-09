@@ -11,3 +11,4 @@ __pycache__/
 res/*.pic
 res/*.pal
 res/*.map
+res/preview.png
