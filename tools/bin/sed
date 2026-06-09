@@ -1,0 +1,14 @@
+#!/bin/bash
+# Portable `sed` shim so PVSnesLib's snes_rules (GNU `sed -i SCRIPT FILE`) works
+# on macOS BSD sed. Only intercepts the `-i` in-place form; everything else is
+# passed straight through to the system sed. Kept project-local (on PATH via the
+# Makefile) so the installed toolchain is never modified.
+if [ "$1" = "-i" ]; then
+    shift
+    script="$1"; shift
+    for f in "$@"; do
+        /usr/bin/sed "$script" "$f" > "$f.sedtmp" && mv "$f.sedtmp" "$f"
+    done
+else
+    exec /usr/bin/sed "$@"
+fi

@@ -1,0 +1,13 @@
+*.obj
+*.ps
+*.asp
+*.sfc
+*.sym
+linkfile
+src/*.asm
+src/core/*.asm
+tests/build/
+__pycache__/
+res/*.pic
+res/*.pal
+res/*.map
