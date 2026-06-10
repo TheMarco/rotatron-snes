@@ -54,11 +54,11 @@ static void hudRefresh(void) {
     hudText(3, 3, "PHASE");
     hudText(13, 3, "SCORE");
     hudText(23, 3, "HEXES");
-    hudNum(2, 4, phase, 1);
+    hudValNum(2, phase, 1);
     hudScore(score);
-    hudNum(22, 4, hexCount, 4);
-    hudText(27, 4, "X");
-    hudNum(28, 4, (u16)longestCasc, 2);
+    hudValNum(22, hexCount, 4);
+    hudValX(27);
+    hudValNum(28, (u16)longestCasc, 2);
     hudDots(activeColors);
 }
 

@@ -20,9 +20,11 @@
  * 4bpp slots = up to word 0x2800... capped at 0x1C00 by the generator). */
 #define VRAM_BG3_TILES 0x1000
 #define VRAM_HUDFONT 0x1C00   /* 64 glyphs x 8 words */
-#define VRAM_HUDBAR 0x1E00    /* 9 heat-bar tiles */
+#define VRAM_HUDBAR 0x1E00    /* 9 heat-bar tiles + 8 panel borders */
+#define VRAM_HUDSHIFT 0x1E88  /* 3px-lowered 0-9,X glyphs (11 upper + 11 lower) */
 #define HUD_FONT_TILE 384     /* (0x1C00 - 0x1000) / 8 */
 #define HUD_BAR_TILE 448
+#define HUD_SHIFT_TILE 465
 #define VRAM_BG2_TILES 0x2000 /* up to 1024 tiles, ends at OBJ base */
 #define VRAM_OBJ_TILES 0x6000
 
@@ -81,6 +83,8 @@ void hudBarSet(u8 px);     /* 0..240 filled pixels */
 void heatColorSet(u16 bgr);
 void hudDots(u8 n);        /* phase color dots (active color count) */
 void hudScore(const u8 *d); /* SCORE_DIGITS BCD digits, LSB first */
+void hudValNum(u8 x, u16 val, u8 digits); /* lowered value-row number */
+void hudValX(u8 x);                       /* lowered value-row 'X' */
 void hudBox(u8 x, u8 y, u8 w, u8 h); /* 1px-bordered panel ring */
 
 #endif

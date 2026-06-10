@@ -101,6 +101,29 @@ void renderInit(void) {
         }
         dmaCopyVram(box, (u16)(VRAM_HUDBAR + 9 * 8), sizeof(box));
     }
+    /* 3px-lowered digit/X glyphs for the panel value rows: each glyph
+     * splits across two tile rows; the lower half bakes in the panel's
+     * bottom border line so row 5 stays seamless. */
+    {
+        static u8 up[11 * 16], lo[11 * 16];
+        const u8 *src;
+        u8 g, r2;
+        for (g = 0; g < 11; g++) {
+            u8 glyph = (g < 10) ? (u8)('0' - 32 + g) : (u8)('X' - 32);
+            src = (u8 *)&hudfont_pic + (u16)glyph * 16;
+            for (r2 = 0; r2 < 8; r2++) {
+                u8 p0 = (r2 >= 3) ? src[(u8)(r2 - 3) * 2] : 0;
+                up[g * 16 + r2 * 2] = p0;
+                up[g * 16 + r2 * 2 + 1] = 0;
+                p0 = (r2 < 3) ? src[(u8)(r2 + 5) * 2] : 0;
+                if (r2 == 7) p0 |= 0xFF; /* panel bottom border line */
+                lo[g * 16 + r2 * 2] = p0;
+                lo[g * 16 + r2 * 2 + 1] = 0;
+            }
+        }
+        dmaCopyVram(up, VRAM_HUDSHIFT, sizeof(up));
+        dmaCopyVram(lo, (u16)(VRAM_HUDSHIFT + 11 * 8), sizeof(lo));
+    }
     setPaletteColor(29, 0x7FFF); /* HUD white */
     setPaletteColor(30, 0x0C63); /* HUD dark backing */
     setPaletteColor(31, 0x03E0); /* heat color (staged per frame after) */
@@ -624,8 +647,8 @@ void hudDots(u8 n) {
     for (i = 0; i < 6; i++) {
         u16 id = (u16)(17 + i) * 4;
         if (i < n) {
-            /* dot center at (30 + 8i, 36): panel value row, right of digit */
-            oamSet(id, (u16)(22 + 8 * i), 27, 3, 0, 0, DOT_TILE, (u8)(2 + i));
+            /* dot center at (30 + 8i, 39): lowered value row, right of digit */
+            oamSet(id, (u16)(22 + 8 * i), 30, 3, 0, 0, DOT_TILE, (u8)(2 + i));
             oamSetEx(id, OBJ_SMALL, OBJ_SHOW);
         } else {
             oamSetVisible(id, OBJ_HIDE);
@@ -633,11 +656,30 @@ void hudDots(u8 n) {
     }
 }
 
+/* Panel value-row writers: 3px-lowered glyphs across map rows 4 and 5. */
+static void hudValGlyph(u8 x, u8 g) {
+    hudMap[4 * 32 + x] = (u16)(HUD_SHIFT_TILE + g) | HUD_ATTR;
+    hudMap[5 * 32 + x] = (u16)(HUD_SHIFT_TILE + 11 + g) | HUD_ATTR;
+}
+
+void hudValNum(u8 x, u16 val, u8 digits) {
+    u8 i;
+    for (i = 0; i < digits; i++) {
+        hudValGlyph((u8)(x + digits - 1 - i), (u8)(val % 10));
+        val /= 10;
+    }
+    hudDirty = 1;
+}
+
+void hudValX(u8 x) {
+    hudValGlyph(x, 10);
+    hudDirty = 1;
+}
+
 void hudScore(const u8 *d) {
     u8 i;
-    u16 *p = &hudMap[4 * 32 + 12]; /* SCORE panel value row, cols 12..19 */
     for (i = 0; i < SCORE_DIGITS; i++) {
-        p[i] = (u16)(HUD_FONT_TILE + '0' - 32 + d[SCORE_DIGITS - 1 - i]) | HUD_ATTR;
+        hudValGlyph((u8)(12 + i), d[SCORE_DIGITS - 1 - i]);
     }
     hudDirty = 1;
 }
