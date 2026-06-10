@@ -18,11 +18,14 @@ int main(void) {
     rngSeed(0x1d2b);
     boardInit(3);
 
-    renderInit();
+    renderInit(); /* leaves the screen force-blanked */
     audioInit();
     gameInit();
     sparksInit();
     boardRebuildMap();
+    renderVBlank(); /* flush board map (blank = unlimited DMA bandwidth) */
+    renderVBlank(); /* flush HUD map + staged palettes */
+    setScreenOn();
 
     while (1) {
         pad = padsCurrent(0);

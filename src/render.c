@@ -136,8 +136,8 @@ void renderInit(void) {
     REG_BGMODE = 0x09; /* mode 1 + BG3 priority: HUD above everything */
     videoMode = 0x17;  /* BG1 + BG2 + BG3 + OBJ */
     REG_TM = 0x17;
-
-    setScreenOn();
+    /* Screen stays force-blanked: main flushes the initial maps (free DMA
+     * bandwidth while blanked), then calls setScreenOn(). */
 }
 
 static u16 cellEntry(u8 tx, u8 ty) {
@@ -210,10 +210,6 @@ void renderVBlank(void) {
     bg2Y -= 0x0010;
     bgSetScroll(1, (u16)(bg2X >> 8) & 0xFF, (u16)(((bg2Y >> 8) - 1) & 0xFF));
     bgSetScroll(2, 0, 0x3FF);
-    if (hudDirty) {
-        dmaCopyVram((u8 *)hudMap, VRAM_BG3_MAP, 0x800);
-        hudDirty = 0;
-    }
     if (heatColorDirty) {
         dmaCopyCGram((u8 *)&heatColor, 31, 2);
         heatColorDirty = 0;
@@ -224,9 +220,15 @@ void renderVBlank(void) {
             dmaCopyCGram((u8 *)&lineBGR[c], (u16)(128 + (2 + c) * 16 + 1), 2);
         dotPalDirty = 0;
     }
+    /* The two 2KB maps NEVER ship in the same vblank: together with OAM +
+     * palettes they exceed vblank DMA bandwidth and the tail gets dropped
+     * mid-VRAM (the 'board cut off after row 0' bug). Board first. */
     if (mapDirty) {
         dmaCopyVram((u8 *)mapBuf, VRAM_BG1_MAP, 0x800);
         mapDirty = 0;
+    } else if (hudDirty) {
+        dmaCopyVram((u8 *)hudMap, VRAM_BG3_MAP, 0x800);
+        hudDirty = 0;
     }
     if (objPalDirty) {
         dmaCopyCGram((u8 *)objPalBuf, 144, 32); /* OBJ palette 1 */
