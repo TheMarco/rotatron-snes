@@ -59,7 +59,7 @@ void renderInit(void) {
      * ASCII 32..95) + 9 procedurally built heat-bar fill tiles at 64..72.
      * 2bpp sub-palette 7 = CGRAM 28..31: those sit in BG1 sub-pal 1's
      * unused tail, so nothing collides. 29=white, 30=dark, 31=heat color. */
-    dmaCopyVram((u8 *)&hudfont_pic, VRAM_BG3_TILES, 1024);
+    dmaCopyVram((u8 *)&hudfont_pic, VRAM_HUDFONT, 1024);
     {
         static u8 bar[9 * 16];
         u16 o = 0;
@@ -76,7 +76,7 @@ void renderInit(void) {
                 }
             }
         }
-        dmaCopyVram(bar, (u16)(VRAM_BG3_TILES + 64 * 8), sizeof(bar));
+        dmaCopyVram(bar, VRAM_HUDBAR, sizeof(bar));
     }
     setPaletteColor(29, 0x7FFF); /* HUD white */
     setPaletteColor(30, 0x0C63); /* HUD dark backing */
@@ -540,12 +540,12 @@ void sparksFrame(u8 frame) {
 /* BG3 entries: glyph | sub-pal 7 | tile-priority (with BGMODE bit 3 that
  * lifts the HUD above every layer and sprite). */
 #define HUD_ATTR ((u16)(7 << 10) | 0x2000)
-#define BAR_BASE 64
+#define BAR_BASE HUD_BAR_TILE
 
 void hudText(u8 x, u8 y, const char *s) {
     u16 *p = &hudMap[(u16)y * 32 + x];
     while (*s) {
-        *p++ = (u16)(*s - 32) | HUD_ATTR;
+        *p++ = (u16)(HUD_FONT_TILE + *s - 32) | HUD_ATTR;
         s++;
     }
     hudDirty = 1;
@@ -555,7 +555,7 @@ void hudNum(u8 x, u8 y, u16 val, u8 digits) {
     u16 *p = &hudMap[(u16)y * 32 + x + digits];
     u8 i;
     for (i = 0; i < digits; i++) {
-        *--p = (u16)('0' - 32 + (val % 10)) | HUD_ATTR;
+        *--p = (u16)(HUD_FONT_TILE + '0' - 32 + (val % 10)) | HUD_ATTR;
         val /= 10;
     }
     hudDirty = 1;

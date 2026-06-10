@@ -828,7 +828,7 @@ const u16 lineBGR[6] = {{
     zero = sum(1 for o in struct_owners if o == 0)
     print(f"structs: {n_struct} ({dual} dual, {zero} axis-only), entries: {len(entry_table)}, "
           f"unique VRAM tiles: {len(tiles)} ({len(tiles) * 32} bytes)")
-    assert len(tiles) <= 1024
+    assert len(tiles) <= 192, 'BG1 tiles would collide with the HUD font at word 0x1C00'
 
 
 if __name__ == "__main__":

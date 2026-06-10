@@ -14,8 +14,15 @@
 #define VRAM_BG1_MAP 0x0000
 #define VRAM_BG2_MAP 0x0400
 #define VRAM_BG3_MAP 0x0800
-#define VRAM_BG3_TILES 0x0C00 /* 2bpp font (64 glyphs) + heat bar tiles */
 #define VRAM_BG1_TILES 0x1000
+/* BG tile bases must be 4K-word aligned: BG3 shares the 0x1000 page with
+ * BG1 and the 2bpp font lives in its unused tail (board uses <=384 of the
+ * 4bpp slots = up to word 0x2800... capped at 0x1C00 by the generator). */
+#define VRAM_BG3_TILES 0x1000
+#define VRAM_HUDFONT 0x1C00   /* 64 glyphs x 8 words */
+#define VRAM_HUDBAR 0x1E00    /* 9 heat-bar tiles */
+#define HUD_FONT_TILE 384     /* (0x1C00 - 0x1000) / 8 */
+#define HUD_BAR_TILE 448
 #define VRAM_BG2_TILES 0x2000 /* up to 1024 tiles, ends at OBJ base */
 #define VRAM_OBJ_TILES 0x6000
 
