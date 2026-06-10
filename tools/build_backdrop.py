@@ -11,7 +11,7 @@ from pathlib import Path
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
-W, H = 256, 224
+W, H = 256, 256  # full 32x32 tilemap: seamless wrap on both axes (drift)
 
 
 def encode_tile(px):
@@ -80,10 +80,8 @@ def main():
     (ROOT / "res/bg2.pic").write_bytes(b"".join(tiles))
 
     mp = bytearray()
-    for ty in range(32):
-        for tx in range(32):
-            e = entries[ty * 32 + tx] if ty < H // 8 else 0
-            mp += bytes((e & 0xFF, e >> 8))
+    for e in entries:
+        mp += bytes((e & 0xFF, e >> 8))
     (ROOT / "res/bg2.map").write_bytes(mp)
 
     pal = bytearray(2)  # slot 0 transparent/black

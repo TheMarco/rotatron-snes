@@ -3,6 +3,6 @@
 #define BG2TAB_H
 #include "core_types.h"
 #define TWINKLE_N 3
-static const u8 twSlot[TWINKLE_N] = {1, 2, 4};
-static const u16 twColor[TWINKLE_N] = {22986, 15653, 13540};
+static const u8 twSlot[TWINKLE_N] = {1, 3, 2};
+static const u16 twColor[TWINKLE_N] = {21931, 16647, 14594};
 #endif

@@ -35,10 +35,14 @@ spark_pic: .incbin "res/spark.pic"
 ambient_pic: .incbin "res/ambient.pic"
 .ends
 
-; ---- BG2 backdrop (quantized backdrops/level1.png, ~30KB: own bank) ----
-.section ".rodata_bg2" superfree
+; ---- BG2 backdrop (quantized backdrops/level1.png) ----
+; The pic alone nearly fills a 32KB LoROM bank, so it gets its own
+; superfree section; map+pal live separately (deadfall bgtex pattern).
+.section ".rodata_bg2pic" superfree
 bg2_pic: .incbin "res/bg2.pic"
 bg2_picend:
+.ends
+.section ".rodata_bg2map" superfree
 bg2_map: .incbin "res/bg2.map"
 bg2_pal: .incbin "res/bg2.pal"
 .ends

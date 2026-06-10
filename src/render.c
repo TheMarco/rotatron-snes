@@ -25,6 +25,7 @@ static u16 lineBuf[6]; /* breathing outline colors, staged for vblank */
 static u8 lineDirty;
 static u16 twBuf[TWINKLE_N]; /* backdrop twinkle colors, staged for vblank */
 static u8 twDirty;
+static u16 bg2X, bg2Y; /* backdrop drift accumulators (8.8) */
 
 void renderInit(void) {
     u16 i;
@@ -141,7 +142,10 @@ void renderVBlank(void) {
     } else {
         bgSetScroll(0, 0, BOARD_VOFS);
     }
-    bgSetScroll(1, 0, 0x3FF); /* backdrop pinned at screen origin (-1 quirk) */
+    /* Seamless backdrop drifts slowly down-left (8.8 accumulators). */
+    bg2X += 0x000C; /* ~2.8 px/s */
+    bg2Y -= 0x0006;
+    bgSetScroll(1, (u16)(bg2X >> 8) & 0xFF, (u16)(((bg2Y >> 8) - 1) & 0xFF));
     if (mapDirty) {
         dmaCopyVram((u8 *)mapBuf, VRAM_BG1_MAP, 0x800);
         mapDirty = 0;
