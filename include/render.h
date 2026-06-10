@@ -43,6 +43,19 @@
 #define BOARD_VOFS ((u16)(0x400 - 61))
 #define REG_SETINI (*(vuint8 *)0x2133)
 #define REG_MOSAIC (*(vuint8 *)0x2106)
+/* Compositing registers bsnes/hardware randomize at power-on (snes9x zeroes
+ * them, which hid the missing init): windows, sub-screen, color math. */
+#define REG_W12SEL (*(vuint8 *)0x2123)
+#define REG_W34SEL (*(vuint8 *)0x2124)
+#define REG_WOBJSEL (*(vuint8 *)0x2125)
+#define REG_WBGLOG (*(vuint8 *)0x212A)
+#define REG_WOBJLOG (*(vuint8 *)0x212B)
+#define REG_TS (*(vuint8 *)0x212D)
+#define REG_TMW (*(vuint8 *)0x212E)
+#define REG_TSW (*(vuint8 *)0x212F)
+#define REG_CGWSEL (*(vuint8 *)0x2130)
+#define REG_CGADSUB (*(vuint8 *)0x2131)
+#define REG_COLDATA (*(vuint8 *)0x2132)
 
 #define VTX_PX_X(k) (BOARD_PX_X + ((k) << 4))
 #define VTX_PX_Y(j) (BOARD_PX_Y + (j) * 24)

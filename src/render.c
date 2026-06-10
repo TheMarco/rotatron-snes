@@ -54,6 +54,22 @@ void renderInit(void) {
     WaitForVBlank();
     oamInit();
     renderZeroState();
+
+    /* Neutralize every compositing path: real hardware (and bsnes) boots
+     * these as garbage - random windows masked sprites and random color
+     * math darkened everything; snes9x's zeroed power-on state hid it. */
+    REG_W12SEL = 0;
+    REG_W34SEL = 0;
+    REG_WOBJSEL = 0;
+    REG_WBGLOG = 0;
+    REG_WOBJLOG = 0;
+    REG_TS = 0;    /* nothing on the sub-screen */
+    REG_TMW = 0;   /* no window masking on main... */
+    REG_TSW = 0;   /* ...or sub */
+    REG_CGWSEL = 0;
+    REG_CGADSUB = 0;
+    REG_COLDATA = 0xE0; /* fixed color = black, all channels */
+    REG_MOSAIC = 0;
 }
 
 /* Load EVERYTHING the game needs into VRAM/CGRAM (call with the screen
