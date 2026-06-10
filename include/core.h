@@ -49,6 +49,10 @@ void boardInit(u8 paletteLen);     /* createBoard (re-roll until no completed he
 void phantomReseed(u8 paletteLen); /* reseedPhantomSlots: re-roll hidden colors on phase change */
 u8 boardHasCompletedHex(void);
 
+/* Completed hexes: vertices whose 6 on-board ring slots share one color.
+ * Out arrays must hold 19 entries (max = interior vertex count). */
+u8 findCompletedHexes(u8 *outK, u8 *outJ, u8 *outColor);
+
 /* Gather the 6 ring colors of (k,j); outReal[i]=1 for on-board slots.
  * Phantom slots read the vertex's hidden buffer. */
 void spinGather(u8 k, u8 j, u8 outColors[6], u8 outReal[6]);

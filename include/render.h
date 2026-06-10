@@ -44,4 +44,12 @@ void spinAnimBegin(u8 k, u8 j, u8 ccw);
 void spinAnimFrame(u8 k, u8 j, u8 ccw, u8 f);
 void spinAnimEnd(void);
 
+/* Clear-animation helpers. triDisp overrides what a triangle displays
+ * (DISP_WHITE / DISP_HIDDEN / 0xFF = its board color); rebuild after edits. */
+extern u8 triDisp[];
+void shakeStart(u8 amp, u8 frames);
+void pulseStart(u8 n, const u8 *ks, const u8 *js);
+void pulseTick(u8 tick);
+void pulseEnd(void);
+
 #endif

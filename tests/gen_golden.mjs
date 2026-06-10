@@ -13,6 +13,7 @@ import {
   isValidVertex,
 } from '../../hex-spin/src/game/board.js';
 import { buildSpinSlots, planSpin } from '../../hex-spin/src/game/spin-model.js';
+import { findCompletedHexes } from '../../hex-spin/src/game/rules.js';
 
 const SEED = 0xbeef;
 let st = SEED;
@@ -87,6 +88,34 @@ for (let n = 0; n < 400; n++) {
   applySpin(board, phantoms, k, j, ccw ? 'ccw' : 'cw');
   lines.push(`SPIN ${k} ${j} ${ccw}`);
   dump(board, phantoms);
+  for (const h of findCompletedHexes(board)) {
+    lines.push(`H ${h.k} ${h.j} ${COLOR_IDX[h.color]}`);
+  }
 }
+
+// Directed completion patterns: random spins essentially never complete a
+// hex, so paint rings mono to exercise detection (incl. overlap and all-19).
+function paintRing(k, j, ci) {
+  for (const [c, r] of ring(k, j)) {
+    const t = board[key(c, r)];
+    if (t) t.color = NAMES[ci];
+  }
+}
+function dumpHexes() {
+  for (const h of findCompletedHexes(board)) lines.push(`H ${h.k} ${h.j} ${COLOR_IDX[h.color]}`);
+}
+lines.push('FORCE single');
+paintRing(6, 3, 0);
+dump(board, phantoms);
+dumpHexes();
+lines.push('FORCE pair');
+paintRing(4, 2, 1);
+paintRing(5, 4, 1);
+dump(board, phantoms);
+dumpHexes();
+lines.push('FORCE all');
+for (const tk of Object.keys(board)) board[tk].color = NAMES[2];
+dump(board, phantoms);
+dumpHexes();
 
 console.log(lines.join('\n'));

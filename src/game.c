@@ -13,10 +13,93 @@ u8 curK, curJ;
 static u8 animTick; /* 0xFF = no spin in flight */
 static u8 animCcw, animK, animJ;
 
+/* Cascade clear animation (port of resolveCompletions' visual beat):
+ *   FLASH  16 ticks: completed triangles strobe white (toggle every 4)
+ *   OUT    12 ticks: blacked out (pins stay); refill colors at the end
+ *   IN      8 ticks: 3-tick white pop, then the new colors land
+ * then re-check: chained completions loop with cascade depth++ (max 50). */
+#define CASC_IDLE 0
+#define CASC_FLASH 1
+#define CASC_OUT 2
+#define CASC_IN 3
+#define ACTIVE_COLORS 3 /* phase 1 palette until phases land */
+
+static u8 cascState, cascTick, cascDepth;
+static u8 cascN;
+static u8 cascHexK[19], cascHexJ[19];
+static u8 affMask[N_TRIANGLES];
+
+static void setAffDisp(u8 disp) {
+    u8 t;
+    for (t = 0; t < N_TRIANGLES; t++) {
+        if (affMask[t]) triDisp[t] = disp;
+    }
+    boardRebuildMap();
+}
+
+/* Detect completions; start a wave if any. Returns wave size. */
+static u8 cascadeCheck(void) {
+    u8 hc[19], i, q, t;
+    cascN = findCompletedHexes(cascHexK, cascHexJ, hc);
+    if (!cascN || cascDepth >= 50) {
+        cascState = CASC_IDLE;
+        cascDepth = 0;
+        return 0;
+    }
+    cascDepth++;
+    for (t = 0; t < N_TRIANGLES; t++) affMask[t] = 0;
+    for (i = 0; i < cascN; i++) {
+        for (q = 0; q < 6; q++) {
+            s8 c = (s8)cascHexK[i] + RING_DC[q];
+            s8 r = (s8)cascHexJ[i] + RING_DR[q];
+            affMask[triOfCell[r][c]] = 1; /* all 6 on-board by definition */
+        }
+    }
+    cascState = CASC_FLASH;
+    cascTick = 0;
+    pulseStart(cascN, cascHexK, cascHexJ);
+    shakeStart(cascN > 1 ? 2 : 1, cascN > 1 ? 12 : 6);
+    return cascN;
+}
+
+static void cascadeFrame(void) {
+    pulseTick(cascTick);
+    switch (cascState) {
+        case CASC_FLASH:
+            if ((cascTick & 3) == 0) setAffDisp(((cascTick >> 2) & 1) ? 0xFF : DISP_WHITE);
+            if (++cascTick >= 16) {
+                setAffDisp(DISP_HIDDEN);
+                cascState = CASC_OUT;
+                cascTick = 0;
+            }
+            break;
+        case CASC_OUT:
+            if (++cascTick >= 12) {
+                u8 t;
+                for (t = 0; t < N_TRIANGLES; t++) {
+                    if (affMask[t]) boardColor[triRow[t]][triCol[t]] = rngColor(ACTIVE_COLORS);
+                }
+                setAffDisp(DISP_WHITE); /* pop-in flash over the new colors */
+                cascState = CASC_IN;
+                cascTick = 0;
+            }
+            break;
+        case CASC_IN:
+            if (cascTick == 3) setAffDisp(0xFF); /* reveal the new colors */
+            if (++cascTick >= 8) {
+                pulseEnd();
+                cascadeCheck(); /* chain: next wave or back to idle */
+            }
+            break;
+    }
+}
+
 void gameInit(void) {
     curK = 6;
     curJ = 3; /* board center vertex */
     animTick = 0xFF;
+    cascState = CASC_IDLE;
+    cascDepth = 0;
 }
 
 /* Score a candidate move: primary axis distance dominates, the off-axis
@@ -61,8 +144,14 @@ void gameFrame(u16 pressed) {
             spinApply(animK, animJ, animCcw);
             boardRebuildMap();
             animTick = 0xFF;
+            cascadeCheck(); /* the spin may have completed hexes */
         }
         return;
+    }
+
+    if (cascState != CASC_IDLE) {
+        cascadeFrame();
+        return; /* input locked while clears resolve */
     }
 
     if (pressed & KEY_UP) moveCursor(0);

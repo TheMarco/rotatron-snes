@@ -252,6 +252,15 @@ def main():
     canonical = {bytes(64): 0}
     tile_lookup = {bytes(64): (0, 0)}
 
+    # Display-color domain is 8: 0..5 real colors, 6 = solid white (clear
+    # flash / refill pop), 7 = hidden (blackout between flash and refill).
+    def cpx(c, is_line):
+        if c == 6:
+            return AXIS_CORE_IDX  # white
+        if c == 7:
+            return 0
+        return (7 + c) if is_line else (1 + c)
+
     def role_to_px(r, ca, cb, keep=(1, 2, 3, 4)):
         if r == 5:
             return AXIS_CORE_IDX
@@ -259,13 +268,13 @@ def main():
             return AXIS_HALO_IDX
         if r in keep:
             if r == 1:
-                return 1 + ca
+                return cpx(ca, False)
             if r == 2:
-                return 7 + ca
+                return cpx(ca, True)
             if r == 3:
-                return 1 + cb
+                return cpx(cb, False)
             if r == 4:
-                return 7 + cb
+                return cpx(cb, True)
         return 0
 
     def graphic(key, ca, cb, keep=(1, 2, 3, 4)):
@@ -300,9 +309,9 @@ def main():
         if nown == 0:
             combos = [(0, 0)]
         elif nown == 1:
-            combos = [(ca, 0) for ca in range(6)]
+            combos = [(ca, 0) for ca in range(8)]
         else:
-            combos = [(ca, cb) for ca in range(6) for cb in range(6)]
+            combos = [(ca, cb) for ca in range(8) for cb in range(8)]
         for ca, cb in combos:
             tid, flips = tile_for(graphic(struct_keys[sid], ca, cb))
             assert tid < 1024, "BG tile index overflow"
@@ -398,8 +407,15 @@ def main():
     def ease(t):
         return 4 * t * t * t if t < 0.5 else 1 - ((-2 * t + 2) ** 3) / 2
 
-    sched = [min(N_SPIN_FRAMES - 1, int(ease((t + 1) / SPIN_TICKS) * N_SPIN_FRAMES))
-             for t in range(SPIN_TICKS)]
+    # Nearest-frame schedule, truncated the moment it would reach 60deg: the
+    # ease-out tail would otherwise hold the 50deg frame for ~7 ticks before
+    # the final swap (reads as a stall). The board recolor IS the last frame.
+    sched = []
+    for t in range(SPIN_TICKS):
+        f = round(ease((t + 1) / SPIN_TICKS) * N_SPIN_FRAMES)
+        if f >= N_SPIN_FRAMES:
+            break
+        sched.append(f)
 
     # ---- emit board.pic / board.pal ----
     pic = bytearray()
@@ -412,6 +428,29 @@ def main():
         w = bgr555(rgb)
         pal += bytes((w & 0xFF, w >> 8))
     (ROOT / "res/board.pal").write_bytes(pal)
+
+    # ---- hex-clear pulse rings (OBJ 4bpp, 4 frames 32x32, cursor palette) ----
+    # Expanding ring: white core frames then grey as it dissipates. Emitted in
+    # the rows-26..29 band layout (frame f at tile cols f*4..f*4+3).
+    PULSE_FRAMES = [(5.0, 2.6, 1), (9.0, 2.2, 1), (12.5, 1.8, 2), (15.0, 1.4, 2)]
+    pimgs = []
+    for (rad, wid, idx) in PULSE_FRAMES:
+        img = [[0] * 32 for _ in range(32)]
+        for y in range(32):
+            for x in range(32):
+                d = math.hypot(x + 0.5 - 16, y + 0.5 - 16)
+                if abs(d - rad) <= wid / 2:
+                    img[y][x] = idx
+                elif abs(d - rad) <= wid / 2 + 1.0:
+                    img[y][x] = 2
+        pimgs.append(img)
+    pulse = bytearray()
+    for trow in range(4):
+        for tcol in range(16):
+            f, tx = tcol // 4, tcol % 4
+            img = pimgs[f]
+            pulse += encode_tile_4bpp(lambda x, y: img[trow * 8 + y][tx * 8 + x])
+    (ROOT / "res/pulse.pic").write_bytes(pulse)
 
     # ---- cursor sprite ----
     cur = [[0] * 16 for _ in range(16)]
@@ -462,7 +501,9 @@ def main():
 #define N_BOARD_VRAM_TILES {len(tiles)}
 #define N_TRIANGLES 54
 #define N_SPIN_FRAMES {N_SPIN_FRAMES}
-#define SPIN_TICKS {SPIN_TICKS}
+#define SPIN_TICKS {len(sched)}
+#define DISP_WHITE 6   /* display-color: solid white flash */
+#define DISP_HIDDEN 7  /* display-color: blacked out (pins stay) */
 
 extern const u8 cellStruct[BOARD_TILES_H][BOARD_TILES_W];   /* 0xFF = blank */
 extern const u8 cellTriA[BOARD_TILES_H][BOARD_TILES_W];     /* 0xFF = no owner */

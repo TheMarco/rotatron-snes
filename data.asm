@@ -19,3 +19,8 @@ cursor_pic: .incbin "res/cursor.pic"
 cursor_picend:
 cursor_pal: .incbin "res/cursor.pal"
 .ends
+
+; ---- Hex-clear pulse rings (4 frames 32x32, rows-26..29 band layout) ----
+.section ".rodata_pulse" superfree
+pulse_pic: .incbin "res/pulse.pic"
+.ends

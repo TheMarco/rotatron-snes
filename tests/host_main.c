@@ -31,6 +31,22 @@ static void dump(void) {
     }
 }
 
+static void paintRing(u8 k, u8 j, u8 ci) {
+    u8 i;
+    for (i = 0; i < 6; i++) {
+        s8 c = (s8)k + RING_DC[i];
+        s8 r = (s8)j + RING_DR[i];
+        if (c >= 0 && c < BOARD_COLS && r >= 0 && r < BOARD_ROWS && boardColor[r][c] != NO_CELL)
+            boardColor[r][c] = ci;
+    }
+}
+
+static void dumpHexes(void) {
+    u8 hk[19], hj[19], hc[19], hn, hi;
+    hn = findCompletedHexes(hk, hj, hc);
+    for (hi = 0; hi < hn; hi++) printf("H %d %d %d\n", hk[hi], hj[hi], hc[hi]);
+}
+
 int main(void) {
     int n;
     rngSeed(0xbeef);
@@ -54,6 +70,26 @@ int main(void) {
         spinApply(k, j, ccw);
         printf("SPIN %d %d %d\n", k, j, ccw);
         dump();
+        dumpHexes();
     }
+
+    printf("FORCE single\n");
+    paintRing(6, 3, 0);
+    dump();
+    dumpHexes();
+    printf("FORCE pair\n");
+    paintRing(4, 2, 1);
+    paintRing(5, 4, 1);
+    dump();
+    dumpHexes();
+    printf("FORCE all\n");
+    {
+        u8 row, col;
+        for (row = 0; row < BOARD_ROWS; row++)
+            for (col = 0; col < BOARD_COLS; col++)
+                if (boardColor[row][col] != NO_CELL) boardColor[row][col] = 2;
+    }
+    dump();
+    dumpHexes();
     return 0;
 }

@@ -5,12 +5,18 @@
 
 extern char board_pic, board_picend, board_pal;
 extern char cursor_pic, cursor_picend, cursor_pal;
-extern char spin_pic;
+extern char spin_pic, pulse_pic;
 
 static u16 mapBuf[32 * 32];
 static u8 mapDirty;
 static u16 objPalBuf[16];
 static u8 objPalDirty;
+
+/* Per-triangle display override (DISP_WHITE/DISP_HIDDEN), 0xFF = boardColor.
+ * Drives the clear flash/blackout/pop without touching game state. */
+u8 triDisp[N_TRIANGLES];
+
+static u8 shakeT, shakeAmp;
 
 void renderInit(void) {
     u16 i;
@@ -34,10 +40,13 @@ void renderInit(void) {
     dmaCopyVram((u8 *)&spin_pic + 8192, (u16)(VRAM_OBJ_TILES + 0x1000), 4096);
     dmaCopyVram((u8 *)&cursor_pic, (u16)(VRAM_OBJ_TILES + 0x1000 + 128 * 16), 64);
     dmaCopyVram((u8 *)&cursor_pic + 64, (u16)(VRAM_OBJ_TILES + 0x1000 + 144 * 16), 64);
+    /* pulse rings: 4-row band right after the cursor rows (tiles 416..479) */
+    dmaCopyVram((u8 *)&pulse_pic, (u16)(VRAM_OBJ_TILES + 0x1000 + 160 * 16), 2048);
     setPalette((u8 *)&cursor_pal, 128, 16 * 2);
     REG_OBSEL = OBJ_SIZE16_L32 | (VRAM_OBJ_TILES >> 13);
 
     for (i = 0; i < 32 * 32; i++) mapBuf[i] = 0;
+    for (i = 0; i < N_TRIANGLES; i++) triDisp[i] = 0xFF;
     mapDirty = 1;
 
     setMode(BG_MODE1, 0);
@@ -63,11 +72,11 @@ void boardRebuildMap(void) {
                 e = entryTable[structBase[sid]];
             } else {
                 a = cellTriA[ty][tx];
-                ca = boardColor[triRow[a]][triCol[a]];
+                ca = (triDisp[a] != 0xFF) ? triDisp[a] : boardColor[triRow[a]][triCol[a]];
                 if (structOwners[sid] == 2) {
                     b = cellTriB[ty][tx];
-                    cb = boardColor[triRow[b]][triCol[b]];
-                    e = entryTable[structBase[sid] + (u16)ca * 6 + cb];
+                    cb = (triDisp[b] != 0xFF) ? triDisp[b] : boardColor[triRow[b]][triCol[b]];
+                    e = entryTable[structBase[sid] + (u16)ca * 8 + cb];
                 } else {
                     e = entryTable[structBase[sid] + ca];
                 }
@@ -80,8 +89,16 @@ void boardRebuildMap(void) {
 
 void renderVBlank(void) {
     /* Re-assert scroll every frame: setMode() resets BG offsets, and this
-     * also survives any future mode/screen transitions. */
-    bgSetScroll(0, 0, BOARD_VOFS);
+     * also survives any future mode/screen transitions. Shake rides on top. */
+    if (shakeT) {
+        s16 sx = (shakeT & 1) ? shakeAmp : -(s16)shakeAmp;
+        s16 sy = (shakeT & 2) ? shakeAmp : -(s16)shakeAmp;
+        if (shakeT < 4) sy = 0; /* settle horizontally first */
+        bgSetScroll(0, (u16)sx, (u16)(BOARD_VOFS + sy));
+        shakeT--;
+    } else {
+        bgSetScroll(0, 0, BOARD_VOFS);
+    }
     if (mapDirty) {
         dmaCopyVram((u8 *)mapBuf, VRAM_BG1_MAP, 0x800);
         mapDirty = 0;
@@ -178,6 +195,47 @@ void spinAnimEnd(void) {
     oamSetVisible(8, OBJ_HIDE);
     oamSetVisible(12, OBJ_HIDE);
     oamSetVisible(16, OBJ_HIDE);
+}
+
+void shakeStart(u8 amp, u8 frames) {
+    shakeAmp = amp;
+    shakeT = frames;
+}
+
+/* Expanding ring pulses at up to 4 cleared hex centers (sprites 5..8,
+ * 32x32, cursor palette). Frame f's top-left tile is 416 + f*4. */
+#define PULSE_BASE_TILE 416
+#define PULSE_SPRITES 4
+
+static u8 pulseN;
+
+void pulseStart(u8 n, const u8 *ks, const u8 *js) {
+    u8 i;
+    pulseN = (n > PULSE_SPRITES) ? PULSE_SPRITES : n;
+    for (i = 0; i < pulseN; i++) {
+        u16 x = VTX_PX_X(ks[i]) - 16;
+        u16 y = VTX_PX_Y(js[i]) - 16 - 1;
+        oamSet((u16)(5 + i) * 4, x, y, 3, 0, 0, PULSE_BASE_TILE, 0);
+        oamSetEx((u16)(5 + i) * 4, OBJ_LARGE, OBJ_SHOW);
+    }
+}
+
+void pulseTick(u8 tick) {
+    u8 i, f = tick >> 2; /* 4 ticks per frame, 4 frames = 16 ticks */
+    if (f >= 4) {
+        pulseEnd();
+        return;
+    }
+    for (i = 0; i < pulseN; i++) {
+        u16 id = (u16)(5 + i) * 4;
+        oamSetGfxOffset(id, (u16)(PULSE_BASE_TILE + f * 4));
+    }
+}
+
+void pulseEnd(void) {
+    u8 i;
+    for (i = 0; i < pulseN; i++) oamSetVisible((u16)(5 + i) * 4, OBJ_HIDE);
+    pulseN = 0;
 }
 
 void cursorUpdate(u8 k, u8 j, u8 frame) {
