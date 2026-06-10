@@ -17,26 +17,17 @@ extern char logo8_pic, logo8_picend, logo8_map, logo8_pal;
 extern char hudfont_pic;
 
 static u16 mapBuf[32 * 32];
-static u8 mapDirty; /* full-map upload pending (init / big cascades) */
+static u8 mapDirty;
 
-/* Incremental map updates: a spin touches ~60 cells; the full 2KB map DMA
- * overflows the overscan-shortened vblank on ACCURATE timing (bsnes dropped
- * the tail and spun rings stayed black; snes9x didn't care). Changed words
- * queue here and are poked via the VRAM port - bytes instead of kilobytes. */
-#define MAPQ_MAX 160
-#define REG_VMAIN (*(vuint8 *)0x2115)
-#define REG_VMADDL (*(vuint8 *)0x2116)
-#define REG_VMADDH (*(vuint8 *)0x2117)
-#define REG_VMDATAL (*(vuint8 *)0x2118)
-#define REG_VMDATAH (*(vuint8 *)0x2119)
-static u16 mapQIdx[MAPQ_MAX];
-static u8 mapQN;
-
+/* Map updates mark the whole map dirty and the NMI hook DMAs it in one 2KB
+ * burst at the START of vblank - the deadfall-proven pattern. (A clever
+ * changed-word VRAM-port queue lived here briefly; its CPU pokes corrupted
+ * VRAM on accurate emulators. One DMA at vblank start fits even the
+ * overscan-shortened blank: ~2KB of a ~3.7KB budget.) */
 static void mapWrite(u16 idx, u16 e) {
     if (mapBuf[idx] == e) return;
     mapBuf[idx] = e;
-    if (mapQN < MAPQ_MAX) mapQIdx[mapQN++] = idx;
-    else mapDirty = 1; /* queue overflow: fall back to the full upload */
+    mapDirty = 1;
 }
 static u16 objPalBuf[16];
 static u8 objPalDirty;
@@ -348,11 +339,10 @@ void renderVBlank(void) {
             dmaCopyCGram((u8 *)&lineBGR[c], (u16)(128 + (2 + c) * 16 + 1), 2);
         dotPalDirty = 0;
     }
-    /* big transfers last (see above) */
+    /* big transfers last (see above); one 2KB map per vblank */
     if (mapDirty) {
         dmaCopyVram((u8 *)mapBuf, VRAM_BG1_MAP, 0x800);
         mapDirty = 0;
-        mapQN = 0;
     } else if (hudDirty) {
         dmaCopyVram((u8 *)hudMap, VRAM_BG3_MAP, 0x800);
         hudDirty = 0;
@@ -362,18 +352,6 @@ void renderVBlank(void) {
      * common case (spins, strobes) a few dozen port pokes, which is what
      * keeps accurate-timing emulators (bsnes) happy in overscan's shorter
      * vblank. The two 2KB maps still never ship in the same vblank. */
-    if (mapQN && !mapDirty) {
-        u8 q;
-        REG_VMAIN = 0x80; /* word-increment on high write */
-        for (q = 0; q < mapQN; q++) {
-            u16 a = VRAM_BG1_MAP + mapQIdx[q];
-            REG_VMADDL = (u8)a;
-            REG_VMADDH = (u8)(a >> 8);
-            REG_VMDATAL = (u8)mapBuf[mapQIdx[q]];
-            REG_VMDATAH = (u8)(mapBuf[mapQIdx[q]] >> 8);
-        }
-        mapQN = 0;
-    }
     if (objPalDirty) {
         dmaCopyCGram((u8 *)objPalBuf, 144, 32); /* OBJ palette 1 */
         objPalDirty = 0;
