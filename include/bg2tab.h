@@ -4,5 +4,5 @@
 #include "core_types.h"
 #define TWINKLE_N 3
 static const u8 twSlot[4][TWINKLE_N] = {{1, 3, 2}, {1, 2, 3}, {1, 2, 3}, {1, 2, 3}};
-static const u16 twColor[4][TWINKLE_N] = {{21931, 16647, 14594}, {26317, 20967, 16774}, {19879, 14600, 10407}, {11627, 8423, 6342}};
+static const u16 twColor[4][TWINKLE_N] = {{21931, 16647, 14594}, {12780, 10565, 7396}, {19879, 14600, 10407}, {11627, 8423, 6342}};
 #endif
