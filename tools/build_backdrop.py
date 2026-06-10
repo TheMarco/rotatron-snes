@@ -121,7 +121,6 @@ def convert(im, name, full_h=None):
 
 def main():
     convert(Image.open(ROOT / "backdrops/level1.png").convert("RGB"), "bg2", 256)
-    convert(Image.open(ROOT / "backdrops/title.png").convert("RGB"), "title", 224)
 
 
 if __name__ == "__main__":

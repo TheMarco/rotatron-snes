@@ -1,8 +1,10 @@
 /* Rotatron SNES - entry point and scene machine:
- *   LOGO  - the studio logo drops in under gravity, bounces twice, settles,
- *           fades (port of deadfall's LogoScene; START skips ahead)
- *   TITLE - backdrops/title.png + credit + blinking PRESS START
- *   PLAY  - the game. START on the title seeds the RNG from press timing.
+ *   LOGO  - the studio logo (mode 3, high color) drops in under gravity,
+ *           bounces twice, settles, fades (deadfall's LogoScene; START skips)
+ *   TITLE - backdrops/title.png in mode 3 with baked texts; PRESS START
+ *           blinks via its reserved palette entry
+ *   PLAY  - the game (mode 1). START on the title seeds the RNG from press
+ *           timing and reloads all game VRAM (the title owned it).
  */
 #include <snes.h>
 #include "core.h"
@@ -24,11 +26,6 @@
 #define LOGO_HOLD 84
 #define LOGO_FADE 18
 
-static void titleTexts(u8 blinkOn) {
-    hudText(2, 22, "BY MARCO VAN HYLCKAMA VLIEG");
-    hudText(10, 25, blinkOn ? "PRESS START" : "           ");
-}
-
 int main(void) {
     u16 pad, padPrev = 0, pressed;
     u8 frame = 0;
@@ -38,16 +35,15 @@ int main(void) {
     s16 logoV = 0;
     u8 logoState = 0, logoBounce = 0;
     u16 logoTimer = 0;
+    u8 blinkOn = 1;
 
     rngSeed(0x1d2b); /* provisional; reseeded at PRESS START */
 
-    renderInit(); /* leaves the screen force-blanked */
+    renderInit(); /* console + OAM boot; screen force-blanked */
     audioInit();
 
-    bg2Load(2); /* studio logo art, top edge lands at y=LOGO_TARGET */
-    bg2Pin(1, (u16)(LOGO_TARGET - LOGO_START - 1));
-    renderLayers(0x02); /* BG2 only */
-    renderVBlank();
+    sceneShow(2); /* studio logo, parked above the screen */
+    scenePinV((u16)(LOGO_TARGET - LOGO_START - 1));
     setScreenOn();
 
     while (1) {
@@ -74,7 +70,7 @@ int main(void) {
                             logoTimer = 0;
                         }
                     }
-                    bg2Pin(1, (u16)((s16)LOGO_TARGET - (logoY >> 8) - 1));
+                    scenePinV((u16)((s16)LOGO_TARGET - (logoY >> 8) - 1));
                 } else if (logoState == 1) { /* settled hold */
                     if (++logoTimer >= LOGO_HOLD) {
                         logoState = 2;
@@ -87,13 +83,7 @@ int main(void) {
                     }
                     if (logoTimer == 0) {
                         setScreenOff();
-                        bg2Load(1); /* title art */
-                        bg2Pin(1, 0x3FF);
-                        hudClear();
-                        titleTexts(1);
-                        renderLayers(0x06); /* BG2 + BG3 */
-                        renderVBlank();
-                        setBrightness(15);
+                        sceneShow(1); /* title art, texts baked in */
                         setScreenOn();
                         scene = SC_TITLE;
                     }
@@ -105,20 +95,20 @@ int main(void) {
                 break;
 
             case SC_TITLE:
-                titleTexts((u8)(((bootFrames >> 5) & 1) == 0));
+                if (((bootFrames >> 5) & 1) != blinkOn) {
+                    blinkOn = (u8)((bootFrames >> 5) & 1);
+                    sceneBlink(blinkOn ? 0x7FFF : 0x0000);
+                }
                 if (pressed & KEY_START) {
                     rngSeed(bootFrames ^ (rngNext() << 1) ^ 0x5a5a);
                     setScreenOff();
-                    bg2Load(0); /* game backdrop */
-                    bg2Pin(0, 0);
-                    hudClear();
+                    renderGameLoad(); /* the title owned VRAM/CGRAM: reload all */
                     boardInit(3);
                     gameInit();
                     sparksInit();
                     boardRebuildMap();
                     renderVBlank(); /* board map (blank = free bandwidth) */
                     renderVBlank(); /* HUD map + staged palettes */
-                    renderLayers(0x17);
                     setScreenOn();
                     scene = SC_PLAY;
                 }

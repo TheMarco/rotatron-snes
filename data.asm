@@ -40,18 +40,23 @@ hudfont_pic: .incbin "res/hudfont.pic"
 ambient_pic: .incbin "res/ambient.pic"
 .ends
 
-; ---- Title screen (backdrops/title.png) + studio logo (from deadfall) ----
-.section ".rodata_title" superfree
-title_pic: .incbin "res/title.pic"
-title_picend:
-title_map: .incbin "res/title.map"
-title_pal: .incbin "res/title.pal"
+; ---- Mode-3 title screen (backdrops/title.png, 8bpp; pic split so each
+; ---- section fits a 32KB bank) + studio logo for the boot drop ----
+.section ".rodata_title8a" superfree
+title8a_pic: .incbin "res/title8a.pic"
+title8a_picend:
 .ends
-.section ".rodata_logo" superfree
-logo2_pic: .incbin "res/logo2.pic"
-logo2_picend:
-logo2_map: .incbin "res/logo2.map"
-logo2_pal: .incbin "res/logo2.pal"
+.section ".rodata_title8b" superfree
+title8b_pic: .incbin "res/title8b.pic"
+title8b_picend:
+title8_map: .incbin "res/title8.map"
+title8_pal: .incbin "res/title8.pal"
+.ends
+.section ".rodata_logo8" superfree
+logo8_pic: .incbin "res/logo8.pic"
+logo8_picend:
+logo8_map: .incbin "res/logo8.map"
+logo8_pal: .incbin "res/logo8.pal"
 .ends
 
 ; ---- BG2 backdrop (quantized backdrops/level1.png) ----

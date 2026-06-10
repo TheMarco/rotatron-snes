@@ -8,8 +8,9 @@ extern char board_pic, board_picend, board_pal;
 extern char cursor_pic, cursor_picend, cursor_pal;
 extern char spin_pic, pulse_pic, spark_pic, ambient_pic;
 extern char bg2_pic, bg2_picend, bg2_map, bg2_pal;
-extern char title_pic, title_picend, title_map, title_pal;
-extern char logo2_pic, logo2_picend, logo2_map, logo2_pal;
+extern char title8a_pic, title8a_picend, title8b_pic, title8b_picend;
+extern char title8_map, title8_pal;
+extern char logo8_pic, logo8_picend, logo8_map, logo8_pal;
 extern char hudfont_pic;
 
 static u16 mapBuf[32 * 32];
@@ -29,8 +30,10 @@ static u8 lineDirty;
 static u16 twBuf[TWINKLE_N]; /* backdrop twinkle colors, staged for vblank */
 static u8 twDirty;
 static u16 bg2X, bg2Y; /* backdrop drift accumulators (8.8) */
-static u8 bg2Manual;   /* scenes pin BG2 scroll instead of drifting */
-static u16 bg2ManualV;
+static u8 sceneMode;   /* mode-3 boot scene active: minimal vblank path */
+static u16 sceneV;     /* pinned BG1 vscroll during scenes */
+static u16 blinkColor; /* CGRAM 255: the baked PRESS START text */
+static u8 blinkDirty;
 static u16 hudMap[32 * 32];
 static u8 hudDirty;
 static u16 heatColor;
@@ -39,13 +42,17 @@ static u8 barPx = 0xFF; /* current bar fill, 0..240 */
 static u8 dotPalDirty;
 
 void renderInit(void) {
-    u16 i;
-
     consoleInit();
     setBrightness(0);
     WaitForVBlank();
-
     oamInit();
+}
+
+/* Load EVERYTHING the game needs into VRAM/CGRAM (call with the screen
+ * force-blanked). Runs at every title -> play transition: the mode-3 title
+ * owns nearly all of VRAM and the full CGRAM, so nothing survives it. */
+void renderGameLoad(void) {
+    u16 i;
 
     /* BG1: the board. 4bpp tiles + 16-color subpalette 0. */
     dmaCopyVram((u8 *)&board_pic, VRAM_BG1_TILES, (u16)(&board_picend - &board_pic));
@@ -163,8 +170,41 @@ void renderInit(void) {
     REG_BGMODE = 0x09; /* mode 1 + BG3 priority: HUD above everything */
     videoMode = 0x17;  /* BG1 + BG2 + BG3 + OBJ */
     REG_TM = 0x17;
-    /* Screen stays force-blanked: main flushes the initial maps (free DMA
-     * bandwidth while blanked), then calls setScreenOn(). */
+    sceneMode = 0;
+    /* Screen stays force-blanked: the caller flushes the initial maps (free
+     * DMA bandwidth while blanked), then calls setScreenOn(). */
+}
+
+/* Mode-3 boot scenes: 8bpp BG1, full-CGRAM palette. which: 1 title, 2 logo.
+ * Call with the screen force-blanked. */
+void sceneShow(u8 which) {
+    setMode(BG_MODE3, 0);
+    bgSetGfxPtr(0, 0x1000);
+    bgSetMapPtr(0, 0x0000, SC_32x32);
+    if (which == 1) {
+        dmaCopyVram((u8 *)&title8a_pic, 0x1000, (u16)(&title8a_picend - &title8a_pic));
+        dmaCopyVram((u8 *)&title8b_pic, 0x4800, (u16)(&title8b_picend - &title8b_pic));
+        dmaCopyVram((u8 *)&title8_map, 0x0000, 0x800);
+        dmaCopyCGram((u8 *)&title8_pal, 0, 512);
+    } else {
+        dmaCopyVram((u8 *)&logo8_pic, 0x1000, (u16)(&logo8_picend - &logo8_pic));
+        dmaCopyVram((u8 *)&logo8_map, 0x0000, 0x800);
+        dmaCopyCGram((u8 *)&logo8_pal, 0, 512);
+    }
+    videoMode = 0x01; /* BG1 only */
+    REG_TM = 0x01;
+    sceneMode = 1;
+    sceneV = 0x3FF;
+    blinkDirty = 0;
+}
+
+void scenePinV(u16 v) {
+    sceneV = v;
+}
+
+void sceneBlink(u16 bgr) {
+    blinkColor = bgr;
+    blinkDirty = 1;
 }
 
 static u16 cellEntry(u8 tx, u8 ty) {
@@ -220,6 +260,14 @@ void ringRefresh(u8 k, u8 j) {
 }
 
 void renderVBlank(void) {
+    if (sceneMode) { /* logo / title: pinned scroll + the blink entry only */
+        bgSetScroll(0, 0, sceneV);
+        if (blinkDirty) {
+            dmaCopyCGram((u8 *)&blinkColor, 255, 2);
+            blinkDirty = 0;
+        }
+        return;
+    }
     /* Re-assert scroll every frame: setMode() resets BG offsets, and this
      * also survives any future mode/screen transitions. Shake rides on top. */
     if (shakeT) {
@@ -231,15 +279,11 @@ void renderVBlank(void) {
     } else {
         bgSetScroll(0, 0, BOARD_VOFS);
     }
-    if (bg2Manual) {
-        bgSetScroll(1, 0, bg2ManualV); /* logo drop / title: pinned */
-    } else {
-        /* Seamless backdrop drifts down-left: 1px steps every 8/16 frames -
-         * frequent enough to read as motion (slower hops looked choppy). */
-        bg2X += 0x0020; /* 7.5 px/s */
-        bg2Y -= 0x0010;
-        bgSetScroll(1, (u16)(bg2X >> 8) & 0xFF, (u16)(((bg2Y >> 8) - 1) & 0xFF));
-    }
+    /* Seamless backdrop drifts down-left: 1px steps every 8/16 frames -
+     * frequent enough to read as motion (slower hops looked choppy). */
+    bg2X += 0x0020; /* 7.5 px/s */
+    bg2Y -= 0x0010;
+    bgSetScroll(1, (u16)(bg2X >> 8) & 0xFF, (u16)(((bg2Y >> 8) - 1) & 0xFF));
     bgSetScroll(2, 0, 0x3FF);
     if (heatColorDirty) {
         dmaCopyCGram((u8 *)&heatColor, 31, 2);
@@ -604,30 +648,6 @@ void sparksFrame(u8 frame) {
  * lifts the HUD above every layer and sprite). */
 #define HUD_ATTR ((u16)(7 << 10) | 0x2000)
 #define BAR_BASE HUD_BAR_TILE
-
-/* Scene plumbing: swap the BG2 art (call with the screen force-blanked),
- * pin/release its scroll, choose visible layers, wipe the HUD. */
-void bg2Load(u8 which) { /* 0 = game backdrop, 1 = title, 2 = logo */
-    u8 *pic = (which == 1) ? (u8 *)&title_pic : (which == 2) ? (u8 *)&logo2_pic : (u8 *)&bg2_pic;
-    u16 len = (which == 1) ? (u16)(&title_picend - &title_pic)
-              : (which == 2) ? (u16)(&logo2_picend - &logo2_pic)
-                             : (u16)(&bg2_picend - &bg2_pic);
-    u8 *map = (which == 1) ? (u8 *)&title_map : (which == 2) ? (u8 *)&logo2_map : (u8 *)&bg2_map;
-    u8 *pal = (which == 1) ? (u8 *)&title_pal : (which == 2) ? (u8 *)&logo2_pal : (u8 *)&bg2_pal;
-    dmaCopyVram(pic, VRAM_BG2_TILES, len);
-    dmaCopyVram(map, VRAM_BG2_MAP, 0x800);
-    dmaCopyCGram(pal, 112, 32);
-}
-
-void bg2Pin(u8 manual, u16 vofs) {
-    bg2Manual = manual;
-    bg2ManualV = vofs;
-}
-
-void renderLayers(u8 tm) {
-    videoMode = tm;
-    REG_TM = tm;
-}
 
 void hudClear(void) {
     u16 i;
