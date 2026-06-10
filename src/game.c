@@ -32,9 +32,11 @@ static u8 affMask[N_TRIANGLES];
 static void setAffDisp(u8 disp) {
     u8 t;
     for (t = 0; t < N_TRIANGLES; t++) {
-        if (affMask[t]) triDisp[t] = disp;
+        if (affMask[t]) {
+            triDisp[t] = disp;
+            triRefresh(t);
+        }
     }
-    boardRebuildMap();
 }
 
 /* Detect completions; start a wave if any. Returns wave size. */
@@ -142,7 +144,7 @@ void gameFrame(u16 pressed) {
         if (animTick >= SPIN_TICKS) {
             spinAnimEnd();
             spinApply(animK, animJ, animCcw);
-            boardRebuildMap();
+            ringRefresh(animK, animJ);
             animTick = 0xFF;
             cascadeCheck(); /* the spin may have completed hexes */
         }

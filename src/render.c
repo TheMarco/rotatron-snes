@@ -56,35 +56,53 @@ void renderInit(void) {
     setScreenOn();
 }
 
+static u16 cellEntry(u8 tx, u8 ty) {
+    u8 sid = cellStruct[ty][tx];
+    u8 a, b, ca, cb;
+    if (sid == 0xFF) return 0;
+    if (structOwners[sid] == 0) /* axis pins over blank space */
+        return entryTable[structBase[sid]];
+    a = cellTriA[ty][tx];
+    ca = (triDisp[a] != 0xFF) ? triDisp[a] : boardColor[triRow[a]][triCol[a]];
+    if (structOwners[sid] == 2) {
+        b = cellTriB[ty][tx];
+        cb = (triDisp[b] != 0xFF) ? triDisp[b] : boardColor[triRow[b]][triCol[b]];
+        return entryTable[structBase[sid] + (u16)ca * 8 + cb];
+    }
+    return entryTable[structBase[sid] + ca];
+}
+
 void boardRebuildMap(void) {
-    u8 tx, ty, sid, a, b, ca, cb;
-    u16 e;
+    u8 tx, ty;
     u16 *row;
     for (ty = 0; ty < BOARD_TILES_H; ty++) {
         row = &mapBuf[(u16)ty * 32 + BOARD_TILE_X];
-        for (tx = 0; tx < BOARD_TILES_W; tx++) {
-            sid = cellStruct[ty][tx];
-            if (sid == 0xFF) {
-                row[tx] = 0;
-                continue;
-            }
-            if (structOwners[sid] == 0) { /* axis pins over blank space */
-                e = entryTable[structBase[sid]];
-            } else {
-                a = cellTriA[ty][tx];
-                ca = (triDisp[a] != 0xFF) ? triDisp[a] : boardColor[triRow[a]][triCol[a]];
-                if (structOwners[sid] == 2) {
-                    b = cellTriB[ty][tx];
-                    cb = (triDisp[b] != 0xFF) ? triDisp[b] : boardColor[triRow[b]][triCol[b]];
-                    e = entryTable[structBase[sid] + (u16)ca * 8 + cb];
-                } else {
-                    e = entryTable[structBase[sid] + ca];
-                }
-            }
-            row[tx] = e;
-        }
+        for (tx = 0; tx < BOARD_TILES_W; tx++) row[tx] = cellEntry(tx, ty);
     }
     mapDirty = 1;
+}
+
+/* Incremental recolor: a full rebuild costs several frames of 65816 time
+ * (the visible 'pause' at the end of a spin); refreshing only the cells a
+ * triangle owns keeps every transition within one frame. */
+void triRefresh(u8 t) {
+    u16 o;
+    for (o = triCellOfs[t]; o < triCellOfs[t + 1]; o++) {
+        u8 tx = triCellXY[o * 2];
+        u8 ty = triCellXY[o * 2 + 1];
+        mapBuf[(u16)ty * 32 + BOARD_TILE_X + tx] = cellEntry(tx, ty);
+    }
+    mapDirty = 1;
+}
+
+void ringRefresh(u8 k, u8 j) {
+    u8 i;
+    for (i = 0; i < 6; i++) {
+        s8 c = (s8)k + RING_DC[i];
+        s8 r = (s8)j + RING_DR[i];
+        if (c >= 0 && c < BOARD_COLS && r >= 0 && r < BOARD_ROWS && boardColor[r][c] != NO_CELL)
+            triRefresh(triOfCell[r][c]);
+    }
 }
 
 void renderVBlank(void) {
