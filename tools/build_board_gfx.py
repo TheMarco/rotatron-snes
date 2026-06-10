@@ -112,6 +112,86 @@ def owner_at(x, y, tri_of):
     return -1
 
 
+def tri_corners(col, row):
+    """Triangle corner points in image (margin-shifted) pixel coords."""
+    x0 = col * 16 + MARGIN
+    y0 = row * HPX + MARGIN
+    if (col + row) % 2 == 0:  # up: apex on top
+        return [(x0 + 16.0, y0), (x0, y0 + HPX), (x0 + 32.0, y0 + HPX)]
+    return [(x0, y0), (x0 + 32.0, y0), (x0 + 16.0, y0 + HPX)]
+
+
+def edge_depth(p, corners):
+    """Distance from interior point p to the nearest triangle edge."""
+    best = 1e9
+    for i in range(3):
+        ax, ay = corners[i]
+        bx, by = corners[(i + 1) % 3]
+        nx, ny = by - ay, ax - bx
+        d = abs((p[0] - ax) * nx + (p[1] - ay) * ny) / math.hypot(nx, ny)
+        best = min(best, d)
+    return best
+
+
+# Phase-1 "PCB chip" inner design: a chip block at the centroid, an altitude
+# trace running toward the base, and two solder pads flanking it. Everything
+# is axis-aligned and hugs the triangle's center column, away from the
+# diagonal edges (detail is dropped on dual-owner tiles, so patterns that
+# cross diagonals would fragment).
+def detail_at(x, y, col, row):
+    up = (col + row) % 2 == 0
+    ax = col * 16 + MARGIN + 16.0          # altitude x
+    yb = row * HPX + MARGIN + (HPX if up else 0)  # base y
+    px, py = x + 0.5, y + 0.5
+    h = (yb - py) if up else (py - yb)     # height above the base, 0..24
+    u = abs(px - ax)
+    if abs(h - 9.0) <= 2.0 and u <= 2.5:   # chip block (5x4)
+        return True
+    if 3.0 <= h <= 7.0 and u <= 0.8:       # trace from chip to the base pads
+        return True
+    return abs(h - 4.5) <= 1.5 and 5.0 <= u <= 7.5  # two pads
+
+
+def compute_layers(tris, tri_of, verts):
+    """owner / line / axis / detail pixel grids, shared with the verifier."""
+    owner = [[owner_at(x - MARGIN, y - MARGIN, tri_of) for x in range(IW)] for y in range(IH)]
+
+    def own(x, y):
+        if 0 <= x < IW and 0 <= y < IH:
+            return owner[y][x]
+        return -1
+
+    line = [[False] * IW for _ in range(IH)]
+    for y in range(IH):
+        for x in range(IW):
+            o = owner[y][x]
+            if o < 0:
+                continue
+            line[y][x] = any(own(x + dx, y + dy) != o
+                             for dy in (-1, 0, 1) for dx in (-1, 0, 1))
+
+    axis = [[axis_at(x, y, verts) for x in range(IW)] for y in range(IH)]
+
+    det = [[False] * IW for _ in range(IH)]
+    for y in range(IH):
+        for x in range(IW):
+            o = owner[y][x]
+            if o >= 0 and not line[y][x] and not axis[y][x]:
+                det[y][x] = detail_at(x, y, tris[o][0], tris[o][1])
+    return owner, line, axis, det
+
+
+def tile_owners(owner, tx, ty):
+    """Distinct triangle owners inside the 8x8 tile, in raster order."""
+    out = []
+    for py in range(8):
+        for px in range(8):
+            o = owner[ty * 8 + py][tx * 8 + px]
+            if o >= 0 and o not in out:
+                out.append(o)
+    return out
+
+
 def valid_vertices(tri_of):
     """(k, j) of every spinnable vertex: real parity + >=1 on-board ring slot."""
     out = []
@@ -165,26 +245,14 @@ def main():
     verts = valid_vertices(tri_of)
     assert len(verts) == 37, len(verts)
 
-    owner = [[owner_at(x - MARGIN, y - MARGIN, tri_of) for x in range(IW)] for y in range(IH)]
-
-    def own(x, y):
-        if 0 <= x < IW and 0 <= y < IH:
-            return owner[y][x]
-        return -1
-
-    line = [[False] * IW for _ in range(IH)]
-    for y in range(IH):
-        for x in range(IW):
-            o = owner[y][x]
-            if o < 0:
-                continue
-            line[y][x] = any(own(x + dx, y + dy) != o
-                             for dy in (-1, 0, 1) for dx in (-1, 0, 1))
-
-    axis = [[axis_at(x, y, verts) for x in range(IW)] for y in range(IH)]
+    owner, line, axis, det = compute_layers(tris, tri_of, verts)
 
     # ---- tile structures ----
-    # roles: 0 outside, 1 fillA, 2 lineA, 3 fillB, 4 lineB, 5 axis core, 6 halo
+    # roles: 0 outside, 1 fillA, 2 lineA, 3 fillB, 4 lineB, 5 axis core,
+    # 6 halo, 7 detail (dim design pixel; single-owner tiles only).
+    # Single-owner tiles become COLOR-AGNOSTIC graphics rendered through
+    # per-color sub-palettes 1..6 (slot 1 fill / 2 line / 3 dim / 4 halo /
+    # 5 white / 6 glow); only dual tiles bake color pairs in sub-palette 0.
     structs = {}
     struct_owners = []
     cell_struct = [[0xFF] * TW for _ in range(TH)]
@@ -193,7 +261,8 @@ def main():
 
     for ty in range(TH):
         for tx in range(TW):
-            owners = []
+            owners = tile_owners(owner, tx, ty)
+            single = len(owners) <= 1
             roles = bytearray(64)
             nonempty = False
             for py in range(8):
@@ -207,10 +276,11 @@ def main():
                         continue
                     if o < 0:
                         continue
-                    if o not in owners:
-                        owners.append(o)
                     ab = owners.index(o)
-                    roles[py * 8 + px] = 1 + 2 * ab + (1 if line[iy][ix] else 0)
+                    if single and det[iy][ix]:
+                        roles[py * 8 + px] = 7
+                    else:
+                        roles[py * 8 + px] = 1 + 2 * ab + (1 if line[iy][ix] else 0)
                     nonempty = True
             if not nonempty:
                 continue
@@ -247,15 +317,30 @@ def main():
     pal_rgb += [GREY, WHITE, (0, 0, 0)]
     AXIS_CORE_IDX, AXIS_HALO_IDX = 14, 13
 
+    # Per-color sub-palettes 1..6 for single-owner tiles:
+    # [1] fill, [2] neon line, [3] dim detail tint, [4] pin halo, [5] white
+    # (axis core + flash), [6] glow (CGRAM-animated, mirrored by glowSet).
+    DETAIL_MIX = 0.42
+    def dim(name, neon_rgb):
+        f = boost(DARK[name])
+        return tuple(int(f[i] + (neon_rgb[i] - f[i]) * DETAIL_MIX) for i in range(3))
+
+    color_pals = []
+    for name, neon_rgb in NEON:
+        cp = [(0, 0, 0), boost(DARK[name]), neon_rgb, dim(name, neon_rgb),
+              GREY, WHITE, (0, 0, 0)] + [(0, 0, 0)] * 9
+        color_pals.append(cp)
+    S_FILL, S_LINE, S_DIM, S_HALO, S_WHITE, S_GLOW = 1, 2, 3, 4, 5, 6
+
     # ---- tiles: dedup with flips against canonical tiles only ----
     tiles = [bytes(64)]
     canonical = {bytes(64): 0}
     tile_lookup = {bytes(64): (0, 0)}
 
     # Display-color domain is 9: 0..5 real colors, 6 = solid white (refill
-    # pop), 7 = hidden, 8 = glow (solid palette index 15, whose CGRAM entry
-    # the clear animation ramps every frame: white-hot -> neon -> black).
-    GLOW_IDX = 15
+    # pop), 7 = hidden, 8 = glow (a CGRAM entry the clear animation ramps
+    # every frame: white-hot -> neon -> black).
+    GLOW_IDX = 15  # sub-palette 0 slot for dual tiles
     def cpx(c, is_line):
         if c == 6:
             return AXIS_CORE_IDX  # white
@@ -265,6 +350,7 @@ def main():
             return GLOW_IDX
         return (7 + c) if is_line else (1 + c)
 
+    # Dual tiles: sub-palette 0, colors baked per combo (as before).
     def role_to_px(r, ca, cb, keep=(1, 2, 3, 4)):
         if r == 5:
             return AXIS_CORE_IDX
@@ -283,6 +369,23 @@ def main():
 
     def graphic(key, ca, cb, keep=(1, 2, 3, 4)):
         return bytes(role_to_px(r, ca, cb, keep) for r in key)
+
+    # Single-owner tiles: color-agnostic indices into a per-color sub-palette.
+    # disp: 0 = normal (fill/line/dim), 1 = white, 2 = hidden, 3 = glow.
+    def graphic_single(key, disp):
+        body = {0: {1: S_FILL, 2: S_LINE, 7: S_DIM},
+                1: {1: S_WHITE, 2: S_WHITE, 7: S_WHITE},
+                2: {1: 0, 2: 0, 7: 0},
+                3: {1: S_GLOW, 2: S_GLOW, 7: S_GLOW}}[disp]
+        px = bytearray(64)
+        for i, r in enumerate(key):
+            if r == 5:
+                px[i] = S_WHITE
+            elif r == 6:
+                px[i] = S_HALO
+            elif r in body:
+                px[i] = body[r]
+        return bytes(px)
 
     def hflip(p):
         return bytes(p[y * 8 + (7 - x)] for y in range(8) for x in range(8))
@@ -305,38 +408,52 @@ def main():
         tile_lookup[p] = (tid, 0)
         return tid, 0
 
+    # Entry layout per struct:
+    #   owners 0: 1 entry  (axis pins, sub-pal 1 baked)
+    #   owners 1: 4 entries [normal (runtime ORs (1+color)<<10), white,
+    #                        hidden, glow] - variants bake sub-pal 1
+    #   owners 2: 81 entries (9x9 display-color combos, sub-pal 0)
+    PAL1_BITS = 0x0400
     struct_base = []
     entry_table = []
     for sid in range(n_struct):
+        key = struct_keys[sid]
         struct_base.append(len(entry_table))
         nown = struct_owners[sid]
         if nown == 0:
-            combos = [(0, 0)]
+            tid, flips = tile_for(graphic_single(key, 2))
+            entry_table.append(tid | flips | PAL1_BITS)
         elif nown == 1:
-            combos = [(ca, 0) for ca in range(9)]
+            tid, flips = tile_for(graphic_single(key, 0))
+            entry_table.append(tid | flips)  # palette added at runtime
+            for disp in (1, 2, 3):
+                tid, flips = tile_for(graphic_single(key, disp))
+                entry_table.append(tid | flips | PAL1_BITS)
         else:
-            combos = [(ca, cb) for ca in range(9) for cb in range(9)]
-        for ca, cb in combos:
-            tid, flips = tile_for(graphic(struct_keys[sid], ca, cb))
-            assert tid < 1024, "BG tile index overflow"
-            entry_table.append(tid | flips)
+            for ca in range(9):
+                for cb in range(9):
+                    tid, flips = tile_for(graphic(key, ca, cb))
+                    assert tid < 1024, "BG tile index overflow"
+                    entry_table.append(tid | flips)
 
-    # Spin-time variants: keep one owner side (+axis), or axis only.
+    # Spin-time variants: axis-only blanking + dual half tiles (sub-pal 0).
     half_base = []
     half_table = []
     axis_entry = []
     for sid in range(n_struct):
         key = struct_keys[sid]
-        tid, flips = tile_for(graphic(key, 0, 0, keep=()))
-        axis_entry.append(tid | flips)
-        if struct_owners[sid] != 2:
+        if struct_owners[sid] == 2:
+            tid, flips = tile_for(graphic(key, 0, 0, keep=()))
+            axis_entry.append(tid | flips)
+            half_base.append(len(half_table))
+            for keep in ((1, 2), (3, 4)):  # A-only x6, then B-only x6
+                for c in range(6):
+                    tid, flips = tile_for(graphic(key, c, c, keep=keep))
+                    half_table.append(tid | flips)
+        else:
+            tid, flips = tile_for(graphic_single(key, 2))
+            axis_entry.append(tid | flips | PAL1_BITS)
             half_base.append(0xFFFF)
-            continue
-        half_base.append(len(half_table))
-        for keep in ((1, 2), (3, 4)):  # A-only x6, then B-only x6
-            for c in range(6):
-                tid, flips = tile_for(graphic(key, c, c, keep=keep))
-                half_table.append(tid | flips)
 
     # ---- spin animation frames ----
     SQ = HPX / (16.0 * math.sqrt(3.0))
@@ -428,9 +545,11 @@ def main():
     (ROOT / "res/board.pic").write_bytes(pic)
 
     pal = bytearray()
-    for rgb in pal_rgb:
-        w = bgr555(rgb)
-        pal += bytes((w & 0xFF, w >> 8))
+    all_pals = [pal_rgb] + color_pals  # sub-pal 0 + per-color 1..6, 224 bytes
+    for cp in all_pals:
+        for rgb in cp:
+            w = bgr555(rgb)
+            pal += bytes((w & 0xFF, w >> 8))
     (ROOT / "res/board.pal").write_bytes(pal)
 
     # ---- hex-clear shockwave (OBJ 4bpp, 4 frames 32x32, cursor palette) ----
@@ -523,8 +642,9 @@ def main():
 #define SPIN_TICKS {len(sched)}
 #define DISP_WHITE 6   /* display-color: solid white flash */
 #define DISP_HIDDEN 7  /* display-color: blacked out (pins stay) */
-#define DISP_GLOW 8    /* display-color: CGRAM-animated glow (BG pal idx 15) */
-#define GLOW_CGRAM 15  /* the CGRAM entry the glow rides on */
+#define DISP_GLOW 8    /* display-color: CGRAM-animated glow */
+#define GLOW_CGRAM 15            /* glow slot in sub-palette 0 (dual tiles) */
+#define GLOW_CGRAM_C(c) (16 * ((c) + 1) + 6) /* glow slot in per-color pals */
 
 extern const u8 cellStruct[BOARD_TILES_H][BOARD_TILES_W];   /* 0xFF = blank */
 extern const u8 cellTriA[BOARD_TILES_H][BOARD_TILES_W];     /* 0xFF = no owner */
@@ -612,6 +732,8 @@ const u16 lineBGR[6] = {{
     tcol = [rng.randrange(6) for _ in tris]
     img = Image.new("RGB", (IW, IH), (0, 0, 0))
     p = img.load()
+    single_grid = [[len(tile_owners(owner, tx, ty)) <= 1 for tx in range(TW)]
+                   for ty in range(TH)]
     for y in range(IH):
         for x in range(IW):
             a = axis[y][x]
@@ -622,7 +744,12 @@ const u16 lineBGR[6] = {{
             if o < 0:
                 continue
             c = tcol[o]
-            p[x, y] = pal_rgb[7 + c] if line[y][x] else pal_rgb[1 + c]
+            if line[y][x]:
+                p[x, y] = pal_rgb[7 + c]
+            elif det[y][x] and single_grid[y // 8][x // 8]:
+                p[x, y] = color_pals[c][S_DIM]
+            else:
+                p[x, y] = pal_rgb[1 + c]
     img.resize((IW * 3, IH * 3), Image.NEAREST).save(ROOT / "res/preview.png")
 
     dual = sum(1 for o in struct_owners if o == 2)

@@ -31,7 +31,7 @@ void renderInit(void) {
 
     /* BG1: the board. 4bpp tiles + 16-color subpalette 0. */
     dmaCopyVram((u8 *)&board_pic, VRAM_BG1_TILES, (u16)(&board_picend - &board_pic));
-    setPalette((u8 *)&board_pal, 0, 16 * 2);
+    setPalette((u8 *)&board_pal, 0, 112 * 2); /* sub-pal 0 + per-color 1..6 */
     bgSetGfxPtr(0, VRAM_BG1_TILES);
     bgSetMapPtr(0, VRAM_BG1_MAP, SC_32x32);
 
@@ -71,7 +71,10 @@ static u16 cellEntry(u8 tx, u8 ty) {
         cb = (triDisp[b] != 0xFF) ? triDisp[b] : boardColor[triRow[b]][triCol[b]];
         return entryTable[structBase[sid] + (u16)ca * 9 + cb];
     }
-    return entryTable[structBase[sid] + ca];
+    /* single-owner: color-agnostic tile + per-color sub-palette 1..6;
+     * white/hidden/glow variants follow at +1..+3 */
+    if (ca < 6) return entryTable[structBase[sid]] | ((u16)(1 + ca) << 10);
+    return entryTable[structBase[sid] + 1 + (ca - 6)];
 }
 
 void boardRebuildMap(void) {
@@ -128,7 +131,10 @@ void renderVBlank(void) {
         objPalDirty = 0;
     }
     if (glowDirty) {
+        u8 c;
         dmaCopyCGram((u8 *)&glowColor, GLOW_CGRAM, 2);
+        for (c = 0; c < 6; c++) /* per-color sub-palette mirrors */
+            dmaCopyCGram((u8 *)&glowColor, GLOW_CGRAM_C(c), 2);
         glowDirty = 0;
     }
 }
