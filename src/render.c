@@ -12,11 +12,13 @@ static u8 mapDirty;
 static u16 objPalBuf[16];
 static u8 objPalDirty;
 
-/* Per-triangle display override (DISP_WHITE/DISP_HIDDEN), 0xFF = boardColor.
+/* Per-triangle display override (DISP_WHITE/HIDDEN/GLOW), 0xFF = boardColor.
  * Drives the clear flash/blackout/pop without touching game state. */
 u8 triDisp[N_TRIANGLES];
 
 static u8 shakeT, shakeAmp;
+static u16 glowColor;
+static u8 glowDirty;
 
 void renderInit(void) {
     u16 i;
@@ -67,7 +69,7 @@ static u16 cellEntry(u8 tx, u8 ty) {
     if (structOwners[sid] == 2) {
         b = cellTriB[ty][tx];
         cb = (triDisp[b] != 0xFF) ? triDisp[b] : boardColor[triRow[b]][triCol[b]];
-        return entryTable[structBase[sid] + (u16)ca * 8 + cb];
+        return entryTable[structBase[sid] + (u16)ca * 9 + cb];
     }
     return entryTable[structBase[sid] + ca];
 }
@@ -125,6 +127,24 @@ void renderVBlank(void) {
         dmaCopyCGram((u8 *)objPalBuf, 144, 32); /* OBJ palette 1 */
         objPalDirty = 0;
     }
+    if (glowDirty) {
+        dmaCopyCGram((u8 *)&glowColor, GLOW_CGRAM, 2);
+        glowDirty = 0;
+    }
+}
+
+/* The glow display-color rides on one CGRAM entry; the clear animation
+ * ramps it every frame (white-hot -> neon -> black). t is 0..16. */
+u16 lerpBGR(u16 a, u16 b, u8 t) {
+    u16 r = ((a & 31) * (16 - t) + (b & 31) * t) >> 4;
+    u16 g = (((a >> 5) & 31) * (16 - t) + ((b >> 5) & 31) * t) >> 4;
+    u16 bl = (((a >> 10) & 31) * (16 - t) + ((b >> 10) & 31) * t) >> 4;
+    return (bl << 10) | (g << 5) | r;
+}
+
+void glowSet(u16 bgr) {
+    glowColor = bgr;
+    glowDirty = 1;
 }
 
 /* H-flip sends static sector i to sector ccwPerm[i]; the flipped frame's
@@ -220,39 +240,56 @@ void shakeStart(u8 amp, u8 frames) {
     shakeT = frames;
 }
 
-/* Expanding ring pulses at up to 4 cleared hex centers (sprites 5..8,
- * 32x32, cursor palette). Frame f's top-left tile is 416 + f*4. */
+/* Shockwave pulses at up to 4 cleared hex centers: wave A fires at tick 0
+ * (sprites 5..8) and an echo wave at tick PULSE_ECHO_AT (sprites 9..12).
+ * 32x32, cursor palette; frame f's top-left tile is 416 + f*4. */
 #define PULSE_BASE_TILE 416
 #define PULSE_SPRITES 4
+#define PULSE_ECHO_AT 14
 
 static u8 pulseN;
+static u8 pulseKs[PULSE_SPRITES], pulseJs[PULSE_SPRITES];
+
+static void pulseWaveShow(u8 wave) {
+    u8 i;
+    for (i = 0; i < pulseN; i++) {
+        u16 id = (u16)(5 + wave * PULSE_SPRITES + i) * 4;
+        u16 x = VTX_PX_X(pulseKs[i]) - 16;
+        u16 y = VTX_PX_Y(pulseJs[i]) - 16 - 1;
+        oamSet(id, x, y, 3, 0, 0, PULSE_BASE_TILE, 0);
+        oamSetEx(id, OBJ_LARGE, OBJ_SHOW);
+    }
+}
+
+static void pulseWaveTick(u8 wave, u8 t) {
+    u8 i, f;
+    if (t == 0) pulseWaveShow(wave);
+    f = t >> 2; /* 4 ticks per frame */
+    for (i = 0; i < pulseN; i++) {
+        u16 id = (u16)(5 + wave * PULSE_SPRITES + i) * 4;
+        if (f >= 4) oamSetVisible(id, OBJ_HIDE);
+        else oamSetGfxOffset(id, (u16)(PULSE_BASE_TILE + f * 4));
+    }
+}
 
 void pulseStart(u8 n, const u8 *ks, const u8 *js) {
     u8 i;
     pulseN = (n > PULSE_SPRITES) ? PULSE_SPRITES : n;
     for (i = 0; i < pulseN; i++) {
-        u16 x = VTX_PX_X(ks[i]) - 16;
-        u16 y = VTX_PX_Y(js[i]) - 16 - 1;
-        oamSet((u16)(5 + i) * 4, x, y, 3, 0, 0, PULSE_BASE_TILE, 0);
-        oamSetEx((u16)(5 + i) * 4, OBJ_LARGE, OBJ_SHOW);
+        pulseKs[i] = ks[i];
+        pulseJs[i] = js[i];
     }
+    pulseWaveShow(0);
 }
 
 void pulseTick(u8 tick) {
-    u8 i, f = tick >> 2; /* 4 ticks per frame, 4 frames = 16 ticks */
-    if (f >= 4) {
-        pulseEnd();
-        return;
-    }
-    for (i = 0; i < pulseN; i++) {
-        u16 id = (u16)(5 + i) * 4;
-        oamSetGfxOffset(id, (u16)(PULSE_BASE_TILE + f * 4));
-    }
+    pulseWaveTick(0, tick);
+    if (tick >= PULSE_ECHO_AT) pulseWaveTick(1, tick - PULSE_ECHO_AT);
 }
 
 void pulseEnd(void) {
     u8 i;
-    for (i = 0; i < pulseN; i++) oamSetVisible((u16)(5 + i) * 4, OBJ_HIDE);
+    for (i = 0; i < PULSE_SPRITES * 2; i++) oamSetVisible((u16)(5 + i) * 4, OBJ_HIDE);
     pulseN = 0;
 }
 

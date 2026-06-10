@@ -53,5 +53,7 @@ void shakeStart(u8 amp, u8 frames);
 void pulseStart(u8 n, const u8 *ks, const u8 *js);
 void pulseTick(u8 tick);
 void pulseEnd(void);
+u16 lerpBGR(u16 a, u16 b, u8 t); /* t 0..16 */
+void glowSet(u16 bgr);           /* stage the DISP_GLOW CGRAM entry */
 
 #endif

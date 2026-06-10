@@ -252,13 +252,17 @@ def main():
     canonical = {bytes(64): 0}
     tile_lookup = {bytes(64): (0, 0)}
 
-    # Display-color domain is 8: 0..5 real colors, 6 = solid white (clear
-    # flash / refill pop), 7 = hidden (blackout between flash and refill).
+    # Display-color domain is 9: 0..5 real colors, 6 = solid white (refill
+    # pop), 7 = hidden, 8 = glow (solid palette index 15, whose CGRAM entry
+    # the clear animation ramps every frame: white-hot -> neon -> black).
+    GLOW_IDX = 15
     def cpx(c, is_line):
         if c == 6:
             return AXIS_CORE_IDX  # white
         if c == 7:
             return 0
+        if c == 8:
+            return GLOW_IDX
         return (7 + c) if is_line else (1 + c)
 
     def role_to_px(r, ca, cb, keep=(1, 2, 3, 4)):
@@ -309,9 +313,9 @@ def main():
         if nown == 0:
             combos = [(0, 0)]
         elif nown == 1:
-            combos = [(ca, 0) for ca in range(8)]
+            combos = [(ca, 0) for ca in range(9)]
         else:
-            combos = [(ca, cb) for ca in range(8) for cb in range(8)]
+            combos = [(ca, cb) for ca in range(9) for cb in range(9)]
         for ca, cb in combos:
             tid, flips = tile_for(graphic(struct_keys[sid], ca, cb))
             assert tid < 1024, "BG tile index overflow"
@@ -429,20 +433,33 @@ def main():
         pal += bytes((w & 0xFF, w >> 8))
     (ROOT / "res/board.pal").write_bytes(pal)
 
-    # ---- hex-clear pulse rings (OBJ 4bpp, 4 frames 32x32, cursor palette) ----
-    # Expanding ring: white core frames then grey as it dissipates. Emitted in
+    # ---- hex-clear shockwave (OBJ 4bpp, 4 frames 32x32, cursor palette) ----
+    # Expanding ring + six radial spark spokes aligned to the triangle seams,
+    # rotating slightly per frame; white core dissipating to grey. Emitted in
     # the rows-26..29 band layout (frame f at tile cols f*4..f*4+3).
-    PULSE_FRAMES = [(5.0, 2.6, 1), (9.0, 2.2, 1), (12.5, 1.8, 2), (15.0, 1.4, 2)]
+    PULSE_FRAMES = [(4.5, 2.6, 1), (8.5, 2.2, 1), (12.0, 1.8, 2), (15.0, 1.4, 2)]
+    SEAM_ANGLES = [0.0, 56.3, 123.7, 180.0, 236.3, 303.7]  # E + the 4 diagonals + W
     pimgs = []
-    for (rad, wid, idx) in PULSE_FRAMES:
+    for f, (rad, wid, idx) in enumerate(PULSE_FRAMES):
         img = [[0] * 32 for _ in range(32)]
+        spoke_r0, spoke_r1 = rad - 1.0, min(15.4, rad + 3.5)
+        rot = math.radians(8.0 * f)
+        spokes = [math.radians(a) + rot for a in SEAM_ANGLES]
         for y in range(32):
             for x in range(32):
-                d = math.hypot(x + 0.5 - 16, y + 0.5 - 16)
+                dx, dy = x + 0.5 - 16, y + 0.5 - 16
+                d = math.hypot(dx, dy)
                 if abs(d - rad) <= wid / 2:
                     img[y][x] = idx
                 elif abs(d - rad) <= wid / 2 + 1.0:
                     img[y][x] = 2
+                elif spoke_r0 <= d <= spoke_r1:
+                    ang = math.atan2(dy, dx)
+                    for sa in spokes:
+                        delta = abs((ang - sa + math.pi) % (2 * math.pi) - math.pi)
+                        if delta * d <= 0.9:  # ~1.8px wide spark
+                            img[y][x] = idx if d <= rad + 1.5 else 2
+                            break
         pimgs.append(img)
     pulse = bytearray()
     for trow in range(4):
@@ -504,6 +521,8 @@ def main():
 #define SPIN_TICKS {len(sched)}
 #define DISP_WHITE 6   /* display-color: solid white flash */
 #define DISP_HIDDEN 7  /* display-color: blacked out (pins stay) */
+#define DISP_GLOW 8    /* display-color: CGRAM-animated glow (BG pal idx 15) */
+#define GLOW_CGRAM 15  /* the CGRAM entry the glow rides on */
 
 extern const u8 cellStruct[BOARD_TILES_H][BOARD_TILES_W];   /* 0xFF = blank */
 extern const u8 cellTriA[BOARD_TILES_H][BOARD_TILES_W];     /* 0xFF = no owner */

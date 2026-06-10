@@ -93,7 +93,7 @@ def main():
                     ca = tcol[a]
                     if nown == 2:
                         b = arr["cellTriB"][ty * TW + tx]
-                        e = arr["entryTable"][arr["structBase"][sid] + ca * 8 + tcol[b]]
+                        e = arr["entryTable"][arr["structBase"][sid] + ca * 9 + tcol[b]]
                     else:
                         e = arr["entryTable"][arr["structBase"][sid] + ca]
                 tid, hf, vf = e & 0x3FF, e & 0x4000, e & 0x8000
