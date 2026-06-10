@@ -57,5 +57,6 @@ void pulseTick(u8 tick);
 void pulseEnd(void);
 u16 lerpBGR(u16 a, u16 b, u8 t); /* t 0..16 */
 void glowSet(u16 bgr);           /* stage the DISP_GLOW CGRAM entry */
+void linePulse(u8 frame);        /* breathing neon outlines (call per frame) */
 
 #endif

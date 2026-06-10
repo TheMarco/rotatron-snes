@@ -20,6 +20,8 @@ u8 triDisp[N_TRIANGLES];
 static u8 shakeT, shakeAmp;
 static u16 glowColor;
 static u8 glowDirty;
+static u16 lineBuf[6]; /* breathing outline colors, staged for vblank */
+static u8 lineDirty;
 
 void renderInit(void) {
     u16 i;
@@ -146,6 +148,24 @@ void renderVBlank(void) {
             dmaCopyCGram((u8 *)&glowColor, GLOW_CGRAM_C(c), 2);
         glowDirty = 0;
     }
+    if (lineDirty) {
+        u8 c;
+        dmaCopyCGram((u8 *)lineBuf, 7, 12); /* sub-pal 0 lines 7..12 */
+        for (c = 0; c < 6; c++)             /* per-color line slot mirrors */
+            dmaCopyCGram((u8 *)&lineBuf[c], (u16)(16 * (c + 1) + 2), 2);
+        lineDirty = 0;
+    }
+}
+
+/* Breathing outlines: all six neon line colors ease toward white and back
+ * on a slow sine - pure palette animation, the SNES stand-in for bloom. */
+static const u8 breathTab[32] = {0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 4, 5, 5, 5, 5, 5,
+                                 5, 5, 5, 5, 4, 4, 4, 3, 3, 2, 2, 1, 1, 0, 0, 0};
+
+void linePulse(u8 frame) {
+    u8 c, t = breathTab[(frame >> 2) & 31]; /* ~2.1s period, max 5/16 */
+    for (c = 0; c < 6; c++) lineBuf[c] = lerpBGR(lineBGR[c], 0x7FFF, t);
+    lineDirty = 1;
 }
 
 /* The glow display-color rides on one CGRAM entry; the clear animation

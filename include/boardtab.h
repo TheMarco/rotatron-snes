@@ -5,7 +5,7 @@
 
 #define BOARD_TILES_W 26
 #define BOARD_TILES_H 23
-#define N_STRUCTS 32
+#define N_STRUCTS 30
 #define N_BOARD_VRAM_TILES 178
 #define N_TRIANGLES 54
 #define N_SPIN_FRAMES 6
@@ -21,7 +21,7 @@ extern const u8 cellTriA[BOARD_TILES_H][BOARD_TILES_W];     /* 0xFF = no owner *
 extern const u8 cellTriB[BOARD_TILES_H][BOARD_TILES_W];     /* 0xFF = <2 owners */
 extern const u8 structOwners[N_STRUCTS];                    /* 0, 1 or 2 */
 extern const u16 structBase[N_STRUCTS];
-extern const u16 entryTable[732];
+extern const u16 entryTable[724];
 extern const u8 triCol[N_TRIANGLES];
 extern const u8 triRow[N_TRIANGLES];
 extern const u8 triOfCell[7][12];

@@ -28,6 +28,7 @@ int main(void) {
 
         gameFrame(pressed);
         cursorUpdate(curK, curJ, frame);
+        linePulse(frame);
         frame++;
 
         WaitForVBlank();

@@ -138,8 +138,13 @@ def edge_depth(p, corners):
 # is axis-aligned and hugs the triangle's center column, away from the
 # diagonal edges (detail is dropped on dual-owner tiles, so patterns that
 # cross diagonals would fragment).
+DETAIL_ENABLED = False  # the chip motif read as clutter in playtests
+
+
 def detail_at(x, y, col, row):
     up = (col + row) % 2 == 0
+    if not DETAIL_ENABLED:
+        return False
     ax = col * 16 + MARGIN + 16.0          # altitude x
     yb = row * HPX + MARGIN + (HPX if up else 0)  # base y
     px, py = x + 0.5, y + 0.5
