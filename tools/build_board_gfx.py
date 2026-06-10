@@ -425,21 +425,22 @@ def main():
         key = struct_keys[sid]
         struct_base.append(len(entry_table))
         nown = struct_owners[sid]
+        PRIO = 0x2000  # board above OBJ prio 2 (ambient sky sprites)
         if nown == 0:
             tid, flips = tile_for(graphic_single(key, 2))
-            entry_table.append(tid | flips | PAL1_BITS)
+            entry_table.append(tid | flips | PAL1_BITS | PRIO)
         elif nown == 1:
             tid, flips = tile_for(graphic_single(key, 0))
-            entry_table.append(tid | flips)  # palette added at runtime
+            entry_table.append(tid | flips | PRIO)  # palette added at runtime
             for disp in (1, 2, 3):
                 tid, flips = tile_for(graphic_single(key, disp))
-                entry_table.append(tid | flips | PAL1_BITS)
+                entry_table.append(tid | flips | PAL1_BITS | PRIO)
         else:
             for ca in range(9):
                 for cb in range(9):
                     tid, flips = tile_for(graphic(key, ca, cb))
                     assert tid < 1024, "BG tile index overflow"
-                    entry_table.append(tid | flips)
+                    entry_table.append(tid | flips | PRIO)
 
     # Spin-time variants: axis-only blanking + dual half tiles (sub-pal 0).
     half_base = []
@@ -449,15 +450,15 @@ def main():
         key = struct_keys[sid]
         if struct_owners[sid] == 2:
             tid, flips = tile_for(graphic(key, 0, 0, keep=()))
-            axis_entry.append(tid | flips)
+            axis_entry.append(tid | flips | 0x2000)
             half_base.append(len(half_table))
             for keep in ((1, 2), (3, 4)):  # A-only x6, then B-only x6
                 for c in range(6):
                     tid, flips = tile_for(graphic(key, c, c, keep=keep))
-                    half_table.append(tid | flips)
+                    half_table.append(tid | flips | 0x2000)
         else:
             tid, flips = tile_for(graphic_single(key, 2))
-            axis_entry.append(tid | flips | PAL1_BITS)
+            axis_entry.append(tid | flips | PAL1_BITS | 0x2000)
             half_base.append(0xFFFF)
 
     # ---- spin animation frames ----
@@ -626,6 +627,38 @@ def main():
                     lambda x, y: img[trow * 8 + y][tcol * 8 + x])
     (ROOT / "res/spark.pic").write_bytes(spark)
 
+    # ---- ambient sky sprites: ship + shooting star (16x16 each) ----
+    ship = [[0] * 16 for _ in range(16)]
+    hull = [(3, 13, 8)]
+    for x in range(3, 14):
+        ship[8][x] = 3
+    for x in range(5, 12):
+        ship[7][x] = 3
+        ship[9][x] = 3
+    for x in range(7, 10):
+        ship[6][x] = 3
+        ship[10][x] = 3
+    ship[7][10] = ship[7][11] = 1     # canopy
+    ship[8][13] = ship[8][14] = 2     # nose tip
+    ship[8][1] = ship[8][2] = 4       # engine glow
+    ship[7][2] = ship[9][2] = 4
+
+    star = [[0] * 16 for _ in range(16)]
+    for i in range(2, 12):
+        star[i][i] = 2                # tail
+    for dy in (0, 1):
+        for dx in (0, 1):
+            star[12 + dy][12 + dx] = 1  # bright head
+    star[11][12] = star[12][11] = star[13][14] = star[14][13] = 2
+
+    amb = bytearray()
+    for trow in (0, 1):
+        for img in (ship, star):
+            for tcol in (0, 1):
+                amb += encode_tile_4bpp(
+                    lambda x, y, im=img: im[trow * 8 + y][tcol * 8 + x])
+    (ROOT / "res/ambient.pic").write_bytes(amb)
+
     # ---- cursor sprite ----
     # Deliberately oval: 2px shorter than wide so the axle pin reads centered
     # inside it on screen (user-tuned; don't "fix" back to a circle).
@@ -642,7 +675,8 @@ def main():
         cpix += encode_tile_4bpp(lambda x, y: cur[ty2 * 8 + y][tx2 * 8 + x])
     (ROOT / "res/cursor.pic").write_bytes(cpix)
     cpal = bytearray(32)
-    for i, rgb in enumerate([(0, 0, 0), WHITE, (140, 140, 160)]):
+    for i, rgb in enumerate([(0, 0, 0), WHITE, (140, 140, 160),
+                             (96, 100, 116), (80, 220, 255)]):
         w = bgr555(rgb)
         cpal[i * 2] = w & 0xFF
         cpal[i * 2 + 1] = w >> 8

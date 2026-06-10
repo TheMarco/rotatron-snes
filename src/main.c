@@ -31,6 +31,8 @@ int main(void) {
         cursorUpdate(curK, curJ, frame);
         linePulse(frame);
         sparksFrame(frame);
+        ambientFrame();
+        twinkleFrame(frame);
         frame++;
 
         WaitForVBlank();

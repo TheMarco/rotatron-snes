@@ -60,5 +60,7 @@ void glowSet(u16 bgr);           /* stage the DISP_GLOW CGRAM entry */
 void linePulse(u8 frame);        /* breathing neon outlines (call per frame) */
 void sparksInit(void);           /* enumerate interior seams (after boardInit) */
 void sparksFrame(u8 frame);      /* spawn/advance seam sparks (call per frame) */
+void ambientFrame(void);         /* ships / shooting stars behind the board */
+void twinkleFrame(u8 frame);     /* backdrop star palette twinkle */
 
 #endif

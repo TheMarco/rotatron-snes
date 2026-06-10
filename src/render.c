@@ -1,11 +1,12 @@
 #include <snes.h>
 #include "core.h"
 #include "boardtab.h"
+#include "bg2tab.h"
 #include "render.h"
 
 extern char board_pic, board_picend, board_pal;
 extern char cursor_pic, cursor_picend, cursor_pal;
-extern char spin_pic, pulse_pic, spark_pic;
+extern char spin_pic, pulse_pic, spark_pic, ambient_pic;
 extern char bg2_pic, bg2_picend, bg2_map, bg2_pal;
 
 static u16 mapBuf[32 * 32];
@@ -22,6 +23,8 @@ static u16 glowColor;
 static u8 glowDirty;
 static u16 lineBuf[6]; /* breathing outline colors, staged for vblank */
 static u8 lineDirty;
+static u16 twBuf[TWINKLE_N]; /* backdrop twinkle colors, staged for vblank */
+static u8 twDirty;
 
 void renderInit(void) {
     u16 i;
@@ -57,6 +60,9 @@ void renderInit(void) {
     /* spark frames: rows 30/31 (tiles 480/482 + their BL/BR row) */
     dmaCopyVram((u8 *)&spark_pic, (u16)(VRAM_OBJ_TILES + 0x1000 + 224 * 16), 128);
     dmaCopyVram((u8 *)&spark_pic + 128, (u16)(VRAM_OBJ_TILES + 0x1000 + 240 * 16), 128);
+    /* ambient ship/star: rows 24/25 cols 2..5 (tiles 386 ship, 388 star) */
+    dmaCopyVram((u8 *)&ambient_pic, (u16)(VRAM_OBJ_TILES + 0x1000 + 130 * 16), 128);
+    dmaCopyVram((u8 *)&ambient_pic + 128, (u16)(VRAM_OBJ_TILES + 0x1000 + 146 * 16), 128);
     setPalette((u8 *)&cursor_pal, 128, 16 * 2);
     REG_OBSEL = OBJ_SIZE16_L32 | (VRAM_OBJ_TILES >> 13);
 
@@ -157,6 +163,12 @@ void renderVBlank(void) {
         for (c = 0; c < 6; c++)             /* per-color line slot mirrors */
             dmaCopyCGram((u8 *)&lineBuf[c], (u16)(16 * (c + 1) + 2), 2);
         lineDirty = 0;
+    }
+    if (twDirty) {
+        u8 i;
+        for (i = 0; i < TWINKLE_N; i++)
+            dmaCopyCGram((u8 *)&twBuf[i], (u16)(112 + twSlot[i]), 2);
+        twDirty = 0;
     }
 }
 
@@ -382,6 +394,67 @@ void sparksInit(void) {
     }
     for (i = 0; i < SPARK_N; i++) spkOn[i] = 0;
     spkCool = 30;
+}
+
+/* Ambient sky: one object at a time crossing BEHIND the board (OBJ priority
+ * 2, under BG1's priority-1 tiles, over the backdrop) - a slow ship
+ * (left/right) or a fast shooting star. Sprite 16. */
+#define AMB_SHIP_TILE 386
+#define AMB_STAR_TILE 388
+#define AMB_ID (16 * 4)
+
+static u8 ambOn, ambStar, ambFlip;
+static s16 ambX, ambY, ambDX, ambDY; /* 8.8 */
+static u16 ambCool;
+
+void ambientFrame(void) {
+    s16 sx, sy;
+    if (!ambOn) {
+        if (ambCool) {
+            ambCool--;
+            return;
+        }
+        ambStar = (rngNext() & 3) == 0; /* 1 in 4 spawns is a shooting star */
+        if (ambStar) {
+            ambFlip = rngNext() & 1;
+            ambX = (s16)(40 + (rngNext() % 150)) << 8;
+            ambY = (s16)(-12) << 8;
+            ambDX = ambFlip ? -0x0280 : 0x0280; /* 2.5 px/f diagonal */
+            ambDY = 0x0200;
+        } else {
+            ambFlip = rngNext() & 1; /* RTL when set */
+            ambX = ambFlip ? ((s16)256 << 8) : ((s16)(-16) << 8);
+            ambY = (s16)(24 + (rngNext() % 170)) << 8;
+            ambDX = ambFlip ? -0x0060 : 0x0060; /* ~0.4 px/f drift */
+            ambDY = 0;
+        }
+        ambOn = 1;
+        return;
+    }
+    ambX += ambDX;
+    ambY += ambDY;
+    sx = ambX >> 8;
+    sy = ambY >> 8;
+    if (sx < -16 || sx > 256 || sy > 224) {
+        ambOn = 0;
+        ambCool = 500 + (rngNext() & 511); /* ~8-17s of empty sky */
+        oamSetVisible(AMB_ID, OBJ_HIDE);
+        return;
+    }
+    oamSet(AMB_ID, (u16)sx, (u16)(sy - 1), 2, ambFlip, 0,
+           ambStar ? AMB_STAR_TILE : AMB_SHIP_TILE, 0);
+    oamSetEx(AMB_ID, OBJ_SMALL, OBJ_SHOW);
+}
+
+/* Backdrop star twinkle: the brightest backdrop palette slots breathe.
+ * Staged here, DMA'd in renderVBlank. */
+void twinkleFrame(u8 frame) {
+    u8 i, t;
+    for (i = 0; i < TWINKLE_N; i++) {
+        t = breathTab[((frame >> 1) + i * 11) & 31];
+        twBuf[i] = lerpBGR(twColor[i], 0x294A, t); /* dim toward dark grey */
+    }
+    twDirty = 1;
 }
 
 void sparksFrame(u8 frame) {
