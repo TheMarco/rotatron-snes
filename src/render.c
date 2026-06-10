@@ -32,6 +32,7 @@ static u8 hudDirty;
 static u16 heatColor;
 static u8 heatColorDirty;
 static u8 barPx = 0xFF; /* current bar fill, 0..240 */
+static u8 dotPalDirty;
 
 void renderInit(void) {
     u16 i;
@@ -78,6 +79,28 @@ void renderInit(void) {
         }
         dmaCopyVram(bar, VRAM_HUDBAR, sizeof(bar));
     }
+    /* Panel border tiles at HUD_BAR_TILE+9..16: 1px white edges (T, B, L,
+     * R, TL, TR, BL, BR). 2bpp: plane0 = white (idx 1). */
+    {
+        static u8 box[8 * 16];
+        u16 o = 0;
+        u8 t2, r2;
+        for (t2 = 0; t2 < 8; t2++) {
+            u8 top = (t2 == 0 || t2 == 4 || t2 == 5);
+            u8 bot = (t2 == 1 || t2 == 6 || t2 == 7);
+            u8 lef = (t2 == 2 || t2 == 4 || t2 == 6);
+            u8 rig = (t2 == 3 || t2 == 5 || t2 == 7);
+            for (r2 = 0; r2 < 8; r2++) {
+                u8 p0 = 0;
+                if ((top && r2 == 0) || (bot && r2 == 7)) p0 = 0xFF;
+                if (lef) p0 |= 0x80;
+                if (rig) p0 |= 0x01;
+                box[o++] = p0;
+                box[o++] = 0;
+            }
+        }
+        dmaCopyVram(box, (u16)(VRAM_HUDBAR + 9 * 8), sizeof(box));
+    }
     setPaletteColor(29, 0x7FFF); /* HUD white */
     setPaletteColor(30, 0x0C63); /* HUD dark backing */
     setPaletteColor(31, 0x03E0); /* heat color (staged per frame after) */
@@ -101,8 +124,7 @@ void renderInit(void) {
     /* ambient ship/star/dot: rows 24/25 cols 2..7 (tiles 386/388/390) */
     dmaCopyVram((u8 *)&ambient_pic, (u16)(VRAM_OBJ_TILES + 0x1000 + 130 * 16), 192);
     dmaCopyVram((u8 *)&ambient_pic + 192, (u16)(VRAM_OBJ_TILES + 0x1000 + 146 * 16), 192);
-    /* OBJ palettes 2..7: slot 1 = the six neon colors (HUD phase dots) */
-    for (i = 0; i < 6; i++) setPaletteColor((u16)(128 + (2 + i) * 16 + 1), lineBGR[i]);
+    dotPalDirty = 1; /* OBJ palettes 2..7 slot 1 = neons; staged to vblank */
     setPalette((u8 *)&cursor_pal, 128, 16 * 2);
     REG_OBSEL = OBJ_SIZE16_L32 | (VRAM_OBJ_TILES >> 13);
 
@@ -195,6 +217,12 @@ void renderVBlank(void) {
     if (heatColorDirty) {
         dmaCopyCGram((u8 *)&heatColor, 31, 2);
         heatColorDirty = 0;
+    }
+    if (dotPalDirty) {
+        u8 c;
+        for (c = 0; c < 6; c++)
+            dmaCopyCGram((u8 *)&lineBGR[c], (u16)(128 + (2 + c) * 16 + 1), 2);
+        dotPalDirty = 0;
     }
     if (mapDirty) {
         dmaCopyVram((u8 *)mapBuf, VRAM_BG1_MAP, 0x800);
@@ -582,7 +610,7 @@ void heatColorSet(u16 bgr) {
     heatColorDirty = 1;
 }
 
-/* Phase-color dots: sprites 17..22, one per active color, next to "P#". */
+/* Phase-color dots: sprites 17..22 inside the PHASE panel value row. */
 #define DOT_TILE 390
 
 void hudDots(u8 n) {
@@ -590,7 +618,8 @@ void hudDots(u8 n) {
     for (i = 0; i < 6; i++) {
         u16 id = (u16)(17 + i) * 4;
         if (i < n) {
-            oamSet(id, (u16)(26 + 10 * i), 10, 3, 0, 0, DOT_TILE, (u8)(2 + i));
+            /* dot center at (28 + 8i, 28): row 3, right of the phase digit */
+            oamSet(id, (u16)(20 + 8 * i), 19, 3, 0, 0, DOT_TILE, (u8)(2 + i));
             oamSetEx(id, OBJ_SMALL, OBJ_SHOW);
         } else {
             oamSetVisible(id, OBJ_HIDE);
@@ -600,10 +629,29 @@ void hudDots(u8 n) {
 
 void hudScore(const u8 *d) {
     u8 i;
-    u16 *p = &hudMap[32 + 12]; /* row 1, cols 12..19, MSB first */
+    u16 *p = &hudMap[3 * 32 + 12]; /* SCORE panel value row, cols 12..19 */
     for (i = 0; i < SCORE_DIGITS; i++) {
         p[i] = (u16)(HUD_FONT_TILE + '0' - 32 + d[SCORE_DIGITS - 1 - i]) | HUD_ATTR;
     }
+    hudDirty = 1;
+}
+
+/* 1px-bordered panel ring: tiles HUD_BAR_TILE+9.. = T B L R TL TR BL BR. */
+void hudBox(u8 x, u8 y, u8 w, u8 h) {
+    u16 base = HUD_BAR_TILE + 9;
+    u8 i;
+    u16 *m = &hudMap[(u16)y * 32 + x];
+    m[0] = (u16)(base + 4) | HUD_ATTR;
+    m[w - 1] = (u16)(base + 5) | HUD_ATTR;
+    for (i = 1; i < w - 1; i++) m[i] = (u16)(base + 0) | HUD_ATTR;
+    for (i = 1; i < h - 1; i++) {
+        m[(u16)i * 32] = (u16)(base + 2) | HUD_ATTR;
+        m[(u16)i * 32 + w - 1] = (u16)(base + 3) | HUD_ATTR;
+    }
+    m += (u16)(h - 1) * 32;
+    m[0] = (u16)(base + 6) | HUD_ATTR;
+    m[w - 1] = (u16)(base + 7) | HUD_ATTR;
+    for (i = 1; i < w - 1; i++) m[i] = (u16)(base + 1) | HUD_ATTR;
     hudDirty = 1;
 }
 

@@ -27,13 +27,14 @@
 #define VRAM_OBJ_TILES 0x6000
 
 /* Board placement: the generated region is 208x184 (8px margin around the
- * 192x168 board for rim axis pins). Region top-left lands at screen (24,20)
- * so the board proper sits at (32,28), centered. X via tilemap col 3; Y via
- * BG1 scroll: screen line n shows map line n + VOFS + 1 -> VOFS = -21. */
+ * 192x168 board for rim axis pins). Region top-left lands at screen (24,44)
+ * so the board proper sits at (32,52): pushed down to clear the HUD panels,
+ * 4px bottom margin. X via tilemap col 3; Y via BG1 scroll: screen line n
+ * shows map line n + VOFS + 1 -> VOFS = -45. */
 #define BOARD_TILE_X 3
 #define BOARD_PX_X 32
-#define BOARD_PX_Y 28
-#define BOARD_VOFS ((u16)(0x400 - 21))
+#define BOARD_PX_Y 52
+#define BOARD_VOFS ((u16)(0x400 - 45))
 
 #define VTX_PX_X(k) (BOARD_PX_X + ((k) << 4))
 #define VTX_PX_Y(j) (BOARD_PX_Y + (j) * 24)
@@ -80,5 +81,6 @@ void hudBarSet(u8 px);     /* 0..240 filled pixels */
 void heatColorSet(u16 bgr);
 void hudDots(u8 n);        /* phase color dots (active color count) */
 void hudScore(const u8 *d); /* SCORE_DIGITS BCD digits, LSB first */
+void hudBox(u8 x, u8 y, u8 w, u8 h); /* 1px-bordered panel ring */
 
 #endif

@@ -43,14 +43,21 @@ static u8 score[SCORE_DIGITS];
 static u8 spinsSince, fmLocked;
 static u16 longestCasc;
 
+/* Three bordered panels under the heat bar (web HUD layout):
+ *   [ PHASE ]      [ SCORE ]      [ HEXES ]
+ *   1 oooooo       00012345       0000  X00   */
 static void hudRefresh(void) {
-    hudText(1, 1, "P");
-    hudNum(2, 1, phase, 1);
+    hudBox(0, 1, 10, 4);
+    hudBox(11, 1, 10, 4);
+    hudBox(22, 1, 10, 4);
+    hudText(2, 2, "PHASE");
+    hudText(24, 2, "HEXES");
+    hudText(13, 2, "SCORE");
+    hudNum(1, 3, phase, 1);
     hudScore(score);
-    hudText(22, 1, "H");
-    hudNum(23, 1, hexCount, 4);
-    hudText(28, 1, "X");
-    hudNum(29, 1, (u16)longestCasc, 2);
+    hudNum(23, 3, hexCount, 4);
+    hudText(28, 3, "X");
+    hudNum(29, 3, (u16)longestCasc, 2);
     hudDots(activeColors);
 }
 
