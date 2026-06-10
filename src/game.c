@@ -477,20 +477,25 @@ void gameFrame(u16 pressed) {
 
     /* A spin in flight owns the frame: advance the eased schedule, then bake
      * the carry into the board (the rotation IS the state change). */
+    if (animTick == 0xFE) { /* sprites lingered one frame over the new board */
+        spinAnimEnd();
+        animTick = 0xFF;
+        cascadeCheck(); /* the spin may have completed hexes */
+        return;
+    }
     if (animTick != 0xFF) {
         spinAnimFrame(animK, animJ, animCcw, spinSched[animTick]);
+        if (animTick == 2) spinAnimBlank(animK, animJ); /* under live sprites */
         animTick++;
         if (animTick >= SPIN_TICKS) {
             u8 c;
-            spinAnimEnd();
             spinApply(animK, animJ, animCcw);
             ringRefresh(animK, animJ);
-            animTick = 0xFF;
             if (spinsSince < 255) spinsSince++;
             for (c = 0; c < 6; c++) { /* tickColorSuppression: per spin */
                 if (suppress[c]) suppress[c]--;
             }
-            cascadeCheck(); /* the spin may have completed hexes */
+            animTick = 0xFE; /* hide the cluster NEXT frame, over the result */
         }
         return;
     }

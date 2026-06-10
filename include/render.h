@@ -77,6 +77,7 @@ void renderCursorHide(u8 hide);
  * sprites for animation frame f. End hides them; caller then applies the
  * spin to the board and rebuilds the map. */
 void spinAnimBegin(u8 k, u8 j, u8 ccw);
+void spinAnimBlank(u8 k, u8 j); /* blank ring cells UNDER the live sprites */
 void spinAnimFrame(u8 k, u8 j, u8 ccw, u8 f);
 void spinAnimEnd(void);
 

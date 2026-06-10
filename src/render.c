@@ -408,9 +408,8 @@ void glowSet(u16 bgr) {
 static const u8 ccwPerm[6] = {0, 5, 4, 3, 2, 1};
 
 void spinAnimBegin(u8 k, u8 j, u8 ccw) {
-    u8 cols[6], real[6], ringTri[6];
-    u8 i, q, c;
-    u16 o;
+    u8 cols[6], real[6];
+    u8 i, c;
 
     spinGather(k, j, cols, real);
     for (i = 0; i < 16; i++) objPalBuf[i] = 0;
@@ -422,6 +421,16 @@ void spinAnimBegin(u8 k, u8 j, u8 ccw) {
     objPalBuf[15] = 0x7FFF; /* axis pin core (white) */
     objPalBuf[8] = 0x5252;  /* axis pin halo (grey 150,150,165) */
     objPalDirty = 1;
+}
+
+/* Blank the ring's BG cells. Called a couple of ticks AFTER the sprites are
+ * up: frame 0 is pixel-identical to the static board, so the swap happens
+ * invisibly underneath the cluster - no ordering race can flash black
+ * (bsnes showed one frame of bare blanked cells when both changed at once). */
+void spinAnimBlank(u8 k, u8 j) {
+    u8 ringTri[6];
+    u8 i, q;
+    u16 o;
 
     /* Ring triangle ids (0xFF = phantom slot, nothing to blank). */
     for (i = 0; i < 6; i++) {
