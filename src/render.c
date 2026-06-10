@@ -183,7 +183,7 @@ void spinAnimEnd(void) {
 void cursorUpdate(u8 k, u8 j, u8 frame) {
     u16 x = VTX_PX_X(k) - 8;
     u16 y = VTX_PX_Y(j) - 8 - 1; /* OAM sprites display one line low */
-    oamSet(OAM_CURSOR, x, y, 3, 0, 0, 0, 0);
+    oamSet(OAM_CURSOR, x, y, 3, 0, 0, CURSOR_TILE, 0);
     oamSetEx(OAM_CURSOR, OBJ_SMALL, OBJ_SHOW);
     /* gentle blink: ~0.7s on, ~0.2s off */
     if ((frame & 63) > 51) oamSetVisible(OAM_CURSOR, OBJ_HIDE);
