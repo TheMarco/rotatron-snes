@@ -68,13 +68,15 @@ static u16 longestCasc;
  * 1-col margin each side (web HUD layout):
  *   PHASE: digit + color dots | SCORE: 8 digits | HEXES: count + X## */
 static void hudRefresh(void) {
-    hudText(1, 0, "HEAT:");
-    hudBox(1, 2, 9, 4);
-    hudBox(11, 2, 10, 4);
-    hudBox(21, 2, 10, 4);
-    hudText(3, 3, "PHASE");
-    hudText(13, 3, "SCORE");
-    hudText(23, 3, "HEXES");
+    /* everything one row lower than the screen top: bsnes shows the center
+     * 224 lines of the 239-line overscan frame, cropping row 0 */
+    hudText(1, 1, "HEAT:");
+    hudBox(1, 3, 9, 4);
+    hudBox(11, 3, 10, 4);
+    hudBox(21, 3, 10, 4);
+    hudText(3, 4, "PHASE");
+    hudText(13, 4, "SCORE");
+    hudText(23, 4, "HEXES");
     hudValNum(2, phase, 1);
     hudScore(score);
     hudValNum(22, hexCount, 4);

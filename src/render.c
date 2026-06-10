@@ -17,7 +17,27 @@ extern char logo8_pic, logo8_picend, logo8_map, logo8_pal;
 extern char hudfont_pic;
 
 static u16 mapBuf[32 * 32];
-static u8 mapDirty;
+static u8 mapDirty; /* full-map upload pending (init / big cascades) */
+
+/* Incremental map updates: a spin touches ~60 cells; the full 2KB map DMA
+ * overflows the overscan-shortened vblank on ACCURATE timing (bsnes dropped
+ * the tail and spun rings stayed black; snes9x didn't care). Changed words
+ * queue here and are poked via the VRAM port - bytes instead of kilobytes. */
+#define MAPQ_MAX 160
+#define REG_VMAIN (*(vuint8 *)0x2115)
+#define REG_VMADDL (*(vuint8 *)0x2116)
+#define REG_VMADDH (*(vuint8 *)0x2117)
+#define REG_VMDATAL (*(vuint8 *)0x2118)
+#define REG_VMDATAH (*(vuint8 *)0x2119)
+static u16 mapQIdx[MAPQ_MAX];
+static u8 mapQN;
+
+static void mapWrite(u16 idx, u16 e) {
+    if (mapBuf[idx] == e) return;
+    mapBuf[idx] = e;
+    if (mapQN < MAPQ_MAX) mapQIdx[mapQN++] = idx;
+    else mapDirty = 1; /* queue overflow: fall back to the full upload */
+}
 static u16 objPalBuf[16];
 static u8 objPalDirty;
 
@@ -264,15 +284,15 @@ void boardRebuildMap(void) {
 
 /* Incremental recolor: a full rebuild costs several frames of 65816 time
  * (the visible 'pause' at the end of a spin); refreshing only the cells a
- * triangle owns keeps every transition within one frame. */
+ * triangle owns keeps every transition within one frame - and the changed
+ * words go through the queue, not a 2KB DMA. */
 void triRefresh(u8 t) {
     u16 o;
     for (o = triCellOfs[t]; o < triCellOfs[t + 1]; o++) {
         u8 tx = triCellXY[o * 2];
         u8 ty = triCellXY[o * 2 + 1];
-        mapBuf[(u16)ty * 32 + BOARD_TILE_X + tx] = cellEntry(tx, ty);
+        mapWrite((u16)ty * 32 + BOARD_TILE_X + tx, cellEntry(tx, ty));
     }
-    mapDirty = 1;
 }
 
 void ringRefresh(u8 k, u8 j) {
@@ -322,15 +342,31 @@ void renderVBlank(void) {
             dmaCopyCGram((u8 *)&lineBGR[c], (u16)(128 + (2 + c) * 16 + 1), 2);
         dotPalDirty = 0;
     }
-    /* The two 2KB maps NEVER ship in the same vblank: together with OAM +
-     * palettes they exceed vblank DMA bandwidth and the tail gets dropped
-     * mid-VRAM (the 'board cut off after row 0' bug). Board first. */
+    /* big transfers last (see above) */
     if (mapDirty) {
         dmaCopyVram((u8 *)mapBuf, VRAM_BG1_MAP, 0x800);
         mapDirty = 0;
+        mapQN = 0;
     } else if (hudDirty) {
         dmaCopyVram((u8 *)hudMap, VRAM_BG3_MAP, 0x800);
         hudDirty = 0;
+    }
+    /* Small CGRAM stages land FIRST (they always fit); the big map DMAs go
+     * last so only their own tail is ever at risk - and the queue makes the
+     * common case (spins, strobes) a few dozen port pokes, which is what
+     * keeps accurate-timing emulators (bsnes) happy in overscan's shorter
+     * vblank. The two 2KB maps still never ship in the same vblank. */
+    if (mapQN && !mapDirty) {
+        u8 q;
+        REG_VMAIN = 0x80; /* word-increment on high write */
+        for (q = 0; q < mapQN; q++) {
+            u16 a = VRAM_BG1_MAP + mapQIdx[q];
+            REG_VMADDL = (u8)a;
+            REG_VMADDH = (u8)(a >> 8);
+            REG_VMDATAL = (u8)mapBuf[mapQIdx[q]];
+            REG_VMDATAH = (u8)(mapBuf[mapQIdx[q]] >> 8);
+        }
+        mapQN = 0;
     }
     if (objPalDirty) {
         dmaCopyCGram((u8 *)objPalBuf, 144, 32); /* OBJ palette 1 */
@@ -436,10 +472,9 @@ void spinAnimBegin(u8 k, u8 j, u8 ccw) {
                     e = halfTable[halfBase[sid] + ((a == t) ? 6 : 0) + oc];
                 }
             }
-            mapBuf[(u16)ty * 32 + BOARD_TILE_X + tx] = e;
+            mapWrite((u16)ty * 32 + BOARD_TILE_X + tx, e);
         }
     }
-    mapDirty = 1;
 }
 
 void spinAnimFrame(u8 k, u8 j, u8 ccw, u8 f) {
@@ -737,7 +772,7 @@ void hudNum(u8 x, u8 y, u16 val, u8 digits) {
 
 void hudBarSet(u8 px) {
     u8 col, full, rem;
-    u16 *row = &hudMap[HUD_BAR_X];
+    u16 *row = &hudMap[32 + HUD_BAR_X]; /* row 1: bsnes crops overscan row 0 */
     if (px == barPx) return;
     barPx = px;
     full = px >> 3;
@@ -762,8 +797,8 @@ void hudDots(u8 n) {
     for (i = 0; i < 6; i++) {
         u16 id = (u16)(17 + i) * 4;
         if (i < n) {
-            /* dot center at (30 + 8i, 39): lowered value row, right of digit */
-            oamSet(id, (u16)(22 + 8 * i), 30, 3, 0, 0, DOT_TILE, (u8)(2 + i));
+            /* dot center at (30 + 8i, 47): lowered value row, right of digit */
+            oamSet(id, (u16)(22 + 8 * i), 38, 3, 0, 0, DOT_TILE, (u8)(2 + i));
             oamSetEx(id, OBJ_SMALL, OBJ_SHOW);
         } else {
             oamSetVisible(id, OBJ_HIDE);
@@ -773,8 +808,8 @@ void hudDots(u8 n) {
 
 /* Panel value-row writers: 3px-lowered glyphs across map rows 4 and 5. */
 static void hudValGlyph(u8 x, u8 g) {
-    hudMap[4 * 32 + x] = (u16)(HUD_SHIFT_TILE + g) | HUD_ATTR;
-    hudMap[5 * 32 + x] = (u16)(HUD_SHIFT_TILE + 11 + g) | HUD_ATTR;
+    hudMap[5 * 32 + x] = (u16)(HUD_SHIFT_TILE + g) | HUD_ATTR;
+    hudMap[6 * 32 + x] = (u16)(HUD_SHIFT_TILE + 11 + g) | HUD_ATTR;
 }
 
 void hudValNum(u8 x, u16 val, u8 digits) {
