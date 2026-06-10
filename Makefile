@@ -5,10 +5,21 @@ ifeq ($(strip $(PVSNESLIB_HOME)),)
 $(error PVSNESLIB_HOME is not set. Export it or write the path into .pvsneslib_home)
 endif
 
-# No audio yet; when music/SFX land, set AUDIOFILES (SFX bank first) like deadfall.
-AUDIOFILES :=
+# snesmod soundbank. When SFX land, their bank goes FIRST (fixes MOD_ indices).
+MUSICFILES := res/music_level1.it
+AUDIOFILES := $(MUSICFILES)
+export SOUNDBANK := res/soundbank
 
 include ${PVSNESLIB_HOME}/devkitsnes/snes_rules
+
+# smconv: soundbank mode, verbose, modules in ROM bank 5+, check sizes
+SMCONVFLAGS := -s -o $(SOUNDBANK) -V -b 5 -f
+
+# The soundbank's ROM-bank count varies with the music set; generate the
+# matching spcSetBank list and compile audio.c only after it exists.
+include/soundbank_banks.h: $(SOUNDBANK).asm
+	@python3 tools/gen_soundbank_banks.py $< $@
+src/audio.obj: include/soundbank_banks.h
 
 .PHONY: all rom run gfx test clean
 
@@ -37,6 +48,10 @@ run: all
 gfx:
 	python3 tools/build_board_gfx.py
 	python3 tools/build_backdrop.py
+
+# Rebuild music modules from music/*.mid (also writes res/*_preview.wav).
+songs:
+	python3 tools/mid2it.py music/level1.mid level1
 
 # Host-side golden tests: compile the core game logic with clang and compare
 # against vectors generated from the web game's JS modules.

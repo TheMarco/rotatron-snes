@@ -7,6 +7,7 @@
 #include "core.h"
 #include "render.h"
 #include "game.h"
+#include "audio.h"
 
 int main(void) {
     u16 pad, padPrev = 0, pressed;
@@ -18,6 +19,7 @@ int main(void) {
     boardInit(3);
 
     renderInit();
+    audioInit();
     gameInit();
     sparksInit();
     boardRebuildMap();
@@ -33,6 +35,7 @@ int main(void) {
         sparksFrame(frame);
         ambientFrame();
         twinkleFrame(frame);
+        audioFrame();
         frame++;
 
         WaitForVBlank();

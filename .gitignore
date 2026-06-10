@@ -12,3 +12,5 @@ res/*.pic
 res/*.pal
 res/*.map
 res/preview.png
+res/soundbank.*
+res/*_preview.wav
