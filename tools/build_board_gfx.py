@@ -593,13 +593,46 @@ def main():
             pulse += encode_tile_4bpp(lambda x, y: img[trow * 8 + y][tx * 8 + x])
     (ROOT / "res/pulse.pic").write_bytes(pulse)
 
+    # ---- seam spark sprite (2 frames, 16x16, cursor palette) ----
+    # Frame A: white electric cross with grey halo; frame B: dim ember.
+    # Emitted as [A-TL, A-TR, B-TL, B-TR, A-BL, A-BR, B-BL, B-BR] so the
+    # runtime DMAs rows 30 and 31 of the OBJ name table in two strips.
+    def spark_img(bright):
+        img = [[0] * 16 for _ in range(16)]
+        for y in range(16):
+            for x in range(16):
+                dx, dy = abs(x - 7), abs(y - 7)
+                if bright:
+                    if dx <= 1 and dy <= 1:
+                        img[y][x] = 1
+                    elif (dx <= 3 and dy == 0) or (dx == 0 and dy <= 3):
+                        img[y][x] = 1
+                    elif dx <= 1 and dy <= 2 or dx <= 2 and dy <= 1:
+                        img[y][x] = 2
+                else:
+                    if dx <= 1 and dy <= 1:
+                        img[y][x] = 2
+                    if dx == 0 and dy == 0:
+                        img[y][x] = 1
+        return img
+
+    simgs = [spark_img(True), spark_img(False)]
+    spark = bytearray()
+    for trow in (0, 1):
+        for f in (0, 1):
+            for tcol in (0, 1):
+                img = simgs[f]
+                spark += encode_tile_4bpp(
+                    lambda x, y: img[trow * 8 + y][tcol * 8 + x])
+    (ROOT / "res/spark.pic").write_bytes(spark)
+
     # ---- cursor sprite ----
-    # Slightly oval on purpose: 1px shorter vertically so the ring hugs the
-    # axle pin better on screen (and under the board's squashed geometry).
+    # Deliberately oval: 2px shorter than wide so the axle pin reads centered
+    # inside it on screen (user-tuned; don't "fix" back to a circle).
     cur = [[0] * 16 for _ in range(16)]
     for y in range(16):
         for x in range(16):
-            d2 = (x - 7.5) ** 2 + ((y - 7.5) * (7.5 / 6.5)) ** 2
+            d2 = (x - 7.5) ** 2 + ((y - 7.5) * (7.5 / 6.0)) ** 2
             if 27.0 <= d2 <= 56.0:
                 cur[y][x] = 1
             elif 18.0 <= d2 < 27.0 or 56.0 < d2 <= 68.0:

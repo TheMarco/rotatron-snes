@@ -5,7 +5,7 @@
 
 extern char board_pic, board_picend, board_pal;
 extern char cursor_pic, cursor_picend, cursor_pal;
-extern char spin_pic, pulse_pic;
+extern char spin_pic, pulse_pic, spark_pic;
 extern char bg2_pic, bg2_picend, bg2_map, bg2_pal;
 
 static u16 mapBuf[32 * 32];
@@ -54,6 +54,9 @@ void renderInit(void) {
     dmaCopyVram((u8 *)&cursor_pic + 64, (u16)(VRAM_OBJ_TILES + 0x1000 + 144 * 16), 64);
     /* pulse rings: 4-row band right after the cursor rows (tiles 416..479) */
     dmaCopyVram((u8 *)&pulse_pic, (u16)(VRAM_OBJ_TILES + 0x1000 + 160 * 16), 2048);
+    /* spark frames: rows 30/31 (tiles 480/482 + their BL/BR row) */
+    dmaCopyVram((u8 *)&spark_pic, (u16)(VRAM_OBJ_TILES + 0x1000 + 224 * 16), 128);
+    dmaCopyVram((u8 *)&spark_pic + 128, (u16)(VRAM_OBJ_TILES + 0x1000 + 240 * 16), 128);
     setPalette((u8 *)&cursor_pal, 128, 16 * 2);
     REG_OBSEL = OBJ_SIZE16_L32 | (VRAM_OBJ_TILES >> 13);
 
@@ -326,6 +329,102 @@ void pulseEnd(void) {
     u8 i;
     for (i = 0; i < PULSE_SPRITES * 2; i++) oamSetVisible((u16)(5 + i) * 4, OBJ_HIDE);
     pulseN = 0;
+}
+
+/* Seam sparks (port of the web game's seam-current layer): white currents
+ * crawling the interior triangle seams - edges whose BOTH triangles are on
+ * the board, never the hex rim. Up to 3 concurrent, sprites 13..15,
+ * bright/dim flicker, 8.8 fixed-point motion. */
+#define SPARK_N 3
+#define SPARK_TILE 480
+#define SPARK_DUR 36
+#define MAX_EDGES 96
+
+static u8 edgeX0[MAX_EDGES], edgeY0[MAX_EDGES], edgeX1[MAX_EDGES], edgeY1[MAX_EDGES];
+static u8 edgeCount;
+static u8 spkOn[SPARK_N], spkT[SPARK_N];
+static s16 spkX[SPARK_N], spkY[SPARK_N], spkDX[SPARK_N], spkDY[SPARK_N];
+static u8 spkCool;
+
+static void addEdge(u8 x0, u8 y0, u8 x1, u8 y1) {
+    if (edgeCount >= MAX_EDGES) return;
+    edgeX0[edgeCount] = x0;
+    edgeY0[edgeCount] = y0;
+    edgeX1[edgeCount] = x1;
+    edgeY1[edgeCount] = y1;
+    edgeCount++;
+}
+
+static u8 onBoard(s8 c, s8 r) {
+    return c >= 0 && c < BOARD_COLS && r >= 0 && r < BOARD_ROWS && boardColor[r][c] != NO_CELL;
+}
+
+void sparksInit(void) {
+    u8 c, r, j, k, i;
+    edgeCount = 0;
+    /* horizontal seams: up(col=k,row=j-1) above, down(col=k,row=j) below */
+    for (j = 1; j < BOARD_ROWS; j++) {
+        for (k = 0; k + 2 <= BOARD_COLS; k++) {
+            if (((k + j) & 1) == 0) continue;
+            if (onBoard(k, j - 1) && onBoard(k, j))
+                addEdge(VTX_PX_X(k), VTX_PX_Y(j), VTX_PX_X(k + 2), VTX_PX_Y(j));
+        }
+    }
+    /* diagonal seams between horizontally adjacent triangles */
+    for (r = 0; r < BOARD_ROWS; r++) {
+        for (c = 0; c + 1 < BOARD_COLS; c++) {
+            if (!onBoard(c, r) || !onBoard(c + 1, r)) continue;
+            if (((c + r) & 1) == 0) /* up | down: edge falls down-right */
+                addEdge(VTX_PX_X(c + 1), VTX_PX_Y(r), VTX_PX_X(c + 2), VTX_PX_Y(r + 1));
+            else                    /* down | up: edge falls down-left */
+                addEdge(VTX_PX_X(c + 2), VTX_PX_Y(r), VTX_PX_X(c + 1), VTX_PX_Y(r + 1));
+        }
+    }
+    for (i = 0; i < SPARK_N; i++) spkOn[i] = 0;
+    spkCool = 30;
+}
+
+void sparksFrame(u8 frame) {
+    u8 i;
+    if (spkCool) {
+        spkCool--;
+    } else {
+        for (i = 0; i < SPARK_N; i++) {
+            if (!spkOn[i]) break;
+        }
+        if (i < SPARK_N && edgeCount) {
+            u8 e = rngNext() % edgeCount;
+            u8 rev = rngNext() & 1;
+            u8 ax = rev ? edgeX1[e] : edgeX0[e];
+            u8 ay = rev ? edgeY1[e] : edgeY0[e];
+            u8 bx = rev ? edgeX0[e] : edgeX1[e];
+            u8 by = rev ? edgeY0[e] : edgeY1[e];
+            spkX[i] = (s16)ax << 8;
+            spkY[i] = (s16)ay << 8;
+            spkDX[i] = (s16)(((s16)bx - ax) << 8) / SPARK_DUR;
+            spkDY[i] = (s16)(((s16)by - ay) << 8) / SPARK_DUR;
+            spkT[i] = 0;
+            spkOn[i] = 1;
+        }
+        spkCool = 50 + (rngNext() & 63);
+    }
+    for (i = 0; i < SPARK_N; i++) {
+        u16 id = (u16)(13 + i) * 4;
+        u16 tile;
+        if (!spkOn[i]) continue;
+        spkX[i] += spkDX[i];
+        spkY[i] += spkDY[i];
+        spkT[i]++;
+        if (spkT[i] >= SPARK_DUR) {
+            spkOn[i] = 0;
+            oamSetVisible(id, OBJ_HIDE);
+            continue;
+        }
+        /* electric flicker: bright/dim every other pair of frames */
+        tile = ((frame >> 1) & 1) ? SPARK_TILE : SPARK_TILE + 2;
+        oamSet(id, (u16)(spkX[i] >> 8) - 8, (u16)(spkY[i] >> 8) - 9, 3, 0, 0, tile, 0);
+        oamSetEx(id, OBJ_SMALL, OBJ_SHOW);
+    }
 }
 
 void cursorUpdate(u8 k, u8 j, u8 frame) {

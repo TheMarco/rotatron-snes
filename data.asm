@@ -25,6 +25,11 @@ cursor_pal: .incbin "res/cursor.pal"
 pulse_pic: .incbin "res/pulse.pic"
 .ends
 
+; ---- Seam spark OBJ frames (2x 16x16, bright + dim) ----
+.section ".rodata_spark" superfree
+spark_pic: .incbin "res/spark.pic"
+.ends
+
 ; ---- BG2 backdrop (quantized backdrops/level1.png, ~30KB: own bank) ----
 .section ".rodata_bg2" superfree
 bg2_pic: .incbin "res/bg2.pic"

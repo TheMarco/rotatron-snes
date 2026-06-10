@@ -19,6 +19,7 @@ int main(void) {
 
     renderInit();
     gameInit();
+    sparksInit();
     boardRebuildMap();
 
     while (1) {
@@ -29,6 +30,7 @@ int main(void) {
         gameFrame(pressed);
         cursorUpdate(curK, curJ, frame);
         linePulse(frame);
+        sparksFrame(frame);
         frame++;
 
         WaitForVBlank();
