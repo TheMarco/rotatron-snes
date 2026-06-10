@@ -13,7 +13,12 @@ import {
   isValidVertex,
 } from '../../hex-spin/src/game/board.js';
 import { buildSpinSlots, planSpin } from '../../hex-spin/src/game/spin-model.js';
-import { findCompletedHexes } from '../../hex-spin/src/game/rules.js';
+import {
+  findCompletedHexes,
+  computeWaveScore,
+  computeMultiKillBonus,
+} from '../../hex-spin/src/game/rules.js';
+import { freshnessMultiplier } from '../../hex-spin/src/game/state.js';
 
 const SEED = 0xbeef;
 let st = SEED;
@@ -147,5 +152,21 @@ lines.push('FORCE all');
 for (const tk of Object.keys(board)) board[tk].color = NAMES[2];
 dump(board, phantoms);
 dumpHexes();
+
+// Scoring math: every product in the float formulas is an exact integer, so
+// the C integer/BCD path must match verbatim (within the C cascade cap of
+// 2^6, which this grid stays under).
+for (let p = 1; p <= 4; p++) {
+  for (let c = 1; c <= 6; c++) {
+    for (let s = 1; s <= 12; s++) {
+      const fm = freshnessMultiplier(s);
+      for (let m = 1; m <= 6; m++) {
+        const hex = Math.round(computeWaveScore(p, c, m, fm));
+        const bonus = Math.round(computeMultiKillBonus(m, p, c, fm));
+        lines.push(`S ${p} ${c} ${s} ${m} ${hex} ${bonus}`);
+      }
+    }
+  }
+}
 
 console.log(lines.join('\n'));

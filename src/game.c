@@ -32,9 +32,26 @@ static void heatGain(u8 n) {
     heat = (heat > HEAT_FULL - g) ? HEAT_FULL : heat + g;
 }
 
+/* Phases (state.js): 1..4, +1 active color each; the phase's NEW color is
+ * color index phase+1 and scores double. Banner pauses heat + input. */
+static u8 phase, activeColors;
+static u8 bannerTick; /* >0: PHASE N announcement in progress */
+static const u16 drain256ByPhase[5] = {0, 1239, 1512, 1784, 2057}; /* +22%/phase */
+
+/* Score (BCD) + freshness. fm10 locks at the first wave of a cascade. */
+static u8 score[SCORE_DIGITS];
+static u8 spinsSince, fmLocked;
+static u16 longestCasc;
+
 static void hudRefresh(void) {
-    hudText(1, 1, "HEX");
-    hudNum(5, 1, hexCount, 4);
+    hudText(1, 1, "P");
+    hudNum(2, 1, phase, 1);
+    hudScore(score);
+    hudText(22, 1, "H");
+    hudNum(23, 1, hexCount, 4);
+    hudText(28, 1, "X");
+    hudNum(29, 1, (u16)longestCasc, 2);
+    hudDots(activeColors);
 }
 
 /* Cascade clear animation (port of resolveCompletions' visual beat):
@@ -48,7 +65,6 @@ static void hudRefresh(void) {
 #define CASC_GLOW 1
 #define CASC_FADE 2
 #define CASC_IN 3
-#define ACTIVE_COLORS 3 /* phase 1 palette until phases land */
 #define GLOW_TICKS 14
 #define FADE_TICKS 12
 #define WHITE_BGR 0x7FFF
@@ -74,11 +90,46 @@ static u8 cascadeCheck(void) {
     u8 hc[19], i, q, t;
     cascN = findCompletedHexes(cascHexK, cascHexJ, hc);
     if (!cascN || cascDepth >= 50) {
+        if (cascDepth) spinsSince = 0; /* a clearing cascade resets freshness */
         cascState = CASC_IDLE;
         cascDepth = 0;
+        /* phase advance is only checked after the whole cascade settles */
+        {
+            u8 target = (hexCount >= PHASE_T4) ? 4 : (hexCount >= PHASE_T3) ? 3
+                        : (hexCount >= PHASE_T2) ? 2 : 1;
+            if (target > phase && phase < 4) {
+                phase = target;
+                activeColors = 2 + phase;
+                phantomReseed(activeColors); /* new color flows in from the rim */
+                heat = (heat > HEAT_FULL - 13107) ? HEAT_FULL : heat + 13107; /* +0.4 */
+                audioSfx(SFX_LEVELUP);
+                hudText(12, 12, "PHASE");
+                hudNum(18, 12, phase, 1);
+                bannerTick = 96; /* ~1.6s: input + heat paused, like the web */
+                hudRefresh();
+            }
+        }
         return 0;
     }
+    if (cascDepth == 0) fmLocked = fresh10(spinsSince); /* lock per tap */
     cascDepth++;
+    if ((u16)cascDepth > longestCasc) longestCasc = cascDepth;
+
+    /* Score the wave: per hex (new phase color = double), + multi-kill. */
+    {
+        u16 unit = scoreWaveUnit(phase, fmLocked);
+        u8 newColor = (phase >= 2) ? phase + 1 : 0xFF;
+        u8 sawNew = 0;
+        for (i = 0; i < cascN; i++) {
+            bcdAddWave(score, unit, cascDepth);
+            if (hc[i] == newColor) {
+                bcdAddWave(score, unit, cascDepth); /* NEW_COLOR_BONUS x2 */
+                sawNew = 1;
+            }
+        }
+        if (cascN >= 2) bcdAddWave(score, scoreBonusUnit(cascN, phase, fmLocked), cascDepth);
+        if (sawNew) audioSfx(SFX_HEXAGONNEW);
+    }
     for (t = 0; t < N_TRIANGLES; t++) affMask[t] = 0;
     for (i = 0; i < cascN; i++) {
         for (q = 0; q < 6; q++) {
@@ -122,7 +173,7 @@ static void cascadeFrame(void) {
             if (++cascTick >= FADE_TICKS) {
                 u8 t2;
                 for (t2 = 0; t2 < N_TRIANGLES; t2++) {
-                    if (affMask[t2]) boardColor[triRow[t2]][triCol[t2]] = rngColor(ACTIVE_COLORS);
+                    if (affMask[t2]) boardColor[triRow[t2]][triCol[t2]] = rngColor(activeColors);
                 }
                 setAffDisp(DISP_WHITE); /* pop-in flash over the new colors */
                 cascState = CASC_IN;
@@ -151,6 +202,13 @@ void gameInit(void) {
     gameOver = 0;
     hexCount = 0;
     entropy = 0;
+    phase = 1;
+    activeColors = 3;
+    bannerTick = 0;
+    bcdClear(score);
+    spinsSince = 0;
+    fmLocked = 20;
+    longestCasc = 0;
     hudRefresh();
 }
 
@@ -158,7 +216,7 @@ void gameInit(void) {
  * also drains during spins and cascades). */
 static void heatFrame(void) {
     u16 t;
-    heatAcc += HEAT_DRAIN_256;
+    heatAcc += drain256ByPhase[phase];
     t = heatAcc >> 8;
     heatAcc &= 0xFF;
     heat = (heat > t) ? heat - t : 0;
@@ -227,6 +285,12 @@ void gameFrame(u16 pressed) {
         if (pressed & KEY_START) restartRun();
         return;
     }
+    if (bannerTick) { /* PHASE N announcement: heat + input on hold */
+        if (--bannerTick == 0) {
+            hudText(12, 12, "       ");
+        }
+        return;
+    }
     heatFrame();
     if (heat == 0 && animTick == 0xFF && cascState == CASC_IDLE) {
         enterGameOver();
@@ -243,6 +307,7 @@ void gameFrame(u16 pressed) {
             spinApply(animK, animJ, animCcw);
             ringRefresh(animK, animJ);
             animTick = 0xFF;
+            if (spinsSince < 255) spinsSince++;
             cascadeCheck(); /* the spin may have completed hexes */
         }
         return;

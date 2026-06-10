@@ -98,9 +98,11 @@ void renderInit(void) {
     /* spark frames: rows 30/31 (tiles 480/482 + their BL/BR row) */
     dmaCopyVram((u8 *)&spark_pic, (u16)(VRAM_OBJ_TILES + 0x1000 + 224 * 16), 128);
     dmaCopyVram((u8 *)&spark_pic + 128, (u16)(VRAM_OBJ_TILES + 0x1000 + 240 * 16), 128);
-    /* ambient ship/star: rows 24/25 cols 2..5 (tiles 386 ship, 388 star) */
-    dmaCopyVram((u8 *)&ambient_pic, (u16)(VRAM_OBJ_TILES + 0x1000 + 130 * 16), 128);
-    dmaCopyVram((u8 *)&ambient_pic + 128, (u16)(VRAM_OBJ_TILES + 0x1000 + 146 * 16), 128);
+    /* ambient ship/star/dot: rows 24/25 cols 2..7 (tiles 386/388/390) */
+    dmaCopyVram((u8 *)&ambient_pic, (u16)(VRAM_OBJ_TILES + 0x1000 + 130 * 16), 192);
+    dmaCopyVram((u8 *)&ambient_pic + 192, (u16)(VRAM_OBJ_TILES + 0x1000 + 146 * 16), 192);
+    /* OBJ palettes 2..7: slot 1 = the six neon colors (HUD phase dots) */
+    for (i = 0; i < 6; i++) setPaletteColor((u16)(128 + (2 + i) * 16 + 1), lineBGR[i]);
     setPalette((u8 *)&cursor_pal, 128, 16 * 2);
     REG_OBSEL = OBJ_SIZE16_L32 | (VRAM_OBJ_TILES >> 13);
 
@@ -578,6 +580,31 @@ void hudBarSet(u8 px) {
 void heatColorSet(u16 bgr) {
     heatColor = bgr;
     heatColorDirty = 1;
+}
+
+/* Phase-color dots: sprites 17..22, one per active color, next to "P#". */
+#define DOT_TILE 390
+
+void hudDots(u8 n) {
+    u8 i;
+    for (i = 0; i < 6; i++) {
+        u16 id = (u16)(17 + i) * 4;
+        if (i < n) {
+            oamSet(id, (u16)(26 + 10 * i), 10, 3, 0, 0, DOT_TILE, (u8)(2 + i));
+            oamSetEx(id, OBJ_SMALL, OBJ_SHOW);
+        } else {
+            oamSetVisible(id, OBJ_HIDE);
+        }
+    }
+}
+
+void hudScore(const u8 *d) {
+    u8 i;
+    u16 *p = &hudMap[32 + 12]; /* row 1, cols 12..19, MSB first */
+    for (i = 0; i < SCORE_DIGITS; i++) {
+        p[i] = (u16)(HUD_FONT_TILE + '0' - 32 + d[SCORE_DIGITS - 1 - i]) | HUD_ATTR;
+    }
+    hudDirty = 1;
 }
 
 void cursorUpdate(u8 k, u8 j, u8 frame) {

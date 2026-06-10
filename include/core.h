@@ -60,6 +60,21 @@ void seamsInit(void);
  * Out arrays must hold 19 entries (max = interior vertex count). */
 u8 findCompletedHexes(u8 *outK, u8 *outJ, u8 *outColor);
 
+/* Scoring (rules.js port, integer/BCD - see src/core/score.c). */
+#define SCORE_DIGITS 8
+#define SCORE_CASC_CAP 6 /* cascade doubling capped at 2^6 (web is unbounded) */
+u8 fresh10(u8 spinsSinceLastClear);
+u16 scoreWaveUnit(u8 phase, u8 fm10);
+u16 scoreBonusUnit(u8 m, u8 phase, u8 fm10);
+void bcdClear(u8 *d);
+void bcdAdd(u8 *d, u16 amount);
+void bcdAddWave(u8 *d, u16 unit, u8 cascade);
+
+/* Phases (state.js): thresholds on hexCount; active colors 3..6. */
+#define PHASE_T2 11
+#define PHASE_T3 26
+#define PHASE_T4 51
+
 /* Gather the 6 ring colors of (k,j); outReal[i]=1 for on-board slots.
  * Phantom slots read the vertex's hidden buffer. */
 void spinGather(u8 k, u8 j, u8 outColors[6], u8 outReal[6]);

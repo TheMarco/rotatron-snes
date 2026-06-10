@@ -95,5 +95,31 @@ int main(void) {
     }
     dump();
     dumpHexes();
+
+    /* Scoring grid: replay the exact runtime path (units + BCD doubling)
+     * and print the decimal results for diffing against rules.js. */
+    {
+        u8 p, c, s, m, fm, d[SCORE_DIGITS];
+        s8 i;
+        char buf[SCORE_DIGITS + 1];
+        for (p = 1; p <= 4; p++)
+            for (c = 1; c <= 6; c++)
+                for (s = 1; s <= 12; s++) {
+                    fm = fresh10(s);
+                    for (m = 1; m <= 6; m++) {
+                        u32 hex, bonus;
+                        bcdClear(d);
+                        bcdAddWave(d, scoreWaveUnit(p, fm), c);
+                        hex = 0;
+                        for (i = SCORE_DIGITS - 1; i >= 0; i--) hex = hex * 10 + d[i];
+                        bcdClear(d);
+                        bcdAddWave(d, scoreBonusUnit(m, p, fm), c);
+                        bonus = 0;
+                        for (i = SCORE_DIGITS - 1; i >= 0; i--) bonus = bonus * 10 + d[i];
+                        (void)buf;
+                        printf("S %d %d %d %d %u %u\n", p, c, s, m, hex, bonus);
+                    }
+                }
+    }
     return 0;
 }

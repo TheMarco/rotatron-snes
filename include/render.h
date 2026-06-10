@@ -78,5 +78,7 @@ void hudText(u8 x, u8 y, const char *s);
 void hudNum(u8 x, u8 y, u16 val, u8 digits);
 void hudBarSet(u8 px);     /* 0..240 filled pixels */
 void heatColorSet(u16 bgr);
+void hudDots(u8 n);        /* phase color dots (active color count) */
+void hudScore(const u8 *d); /* SCORE_DIGITS BCD digits, LSB first */
 
 #endif

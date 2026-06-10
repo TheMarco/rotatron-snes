@@ -651,9 +651,18 @@ def main():
             star[12 + dy][12 + dx] = 1  # bright head
     star[11][12] = star[12][11] = star[13][14] = star[14][13] = 2
 
+    # HUD phase-color dot: small hexagon, palette index 1 (each dot sprite
+    # selects one of OBJ palettes 2..7 whose slot 1 holds a neon color).
+    dot = [[0] * 16 for _ in range(16)]
+    for y in range(16):
+        for x in range(16):
+            dx, dy = abs(x - 7.5), abs(y - 7.5)
+            if dx <= 4 and dy <= 4 and dx + dy <= 6:
+                dot[y][x] = 1
+
     amb = bytearray()
     for trow in (0, 1):
-        for img in (ship, star):
+        for img in (ship, star, dot):
             for tcol in (0, 1):
                 amb += encode_tile_4bpp(
                     lambda x, y, im=img: im[trow * 8 + y][tcol * 8 + x])

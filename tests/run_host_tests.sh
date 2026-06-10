@@ -6,7 +6,7 @@ mkdir -p tests/build
 
 node tests/gen_golden.mjs > tests/build/expected.txt
 cc -DHOST_BUILD -Iinclude -Wall -Wextra -O1 \
-    src/core/rng.c src/core/board.c src/core/spin.c src/core/rules.c src/core/seams.c tests/host_main.c \
+    src/core/rng.c src/core/board.c src/core/spin.c src/core/rules.c src/core/seams.c src/core/score.c tests/host_main.c \
     -o tests/build/host_golden
 tests/build/host_golden > tests/build/actual.txt
 
