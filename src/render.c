@@ -358,8 +358,12 @@ void pulseEnd(void) {
 
 static u8 edgeX0[MAX_EDGES], edgeY0[MAX_EDGES], edgeX1[MAX_EDGES], edgeY1[MAX_EDGES];
 static u8 edgeCount;
+/* Positions are UNSIGNED 8.8: screen x up to 228 -> 58k, which overflows
+ * s16 (that bug put sparks 'outside in space' on the right half of the
+ * board). Deltas stay s16; u16 += s16 is exact modulo arithmetic. */
 static u8 spkOn[SPARK_N], spkT[SPARK_N];
-static s16 spkX[SPARK_N], spkY[SPARK_N], spkDX[SPARK_N], spkDY[SPARK_N];
+static u16 spkX[SPARK_N], spkY[SPARK_N];
+static s16 spkDX[SPARK_N], spkDY[SPARK_N];
 static u8 spkCool;
 
 static void addEdge(u8 x0, u8 y0, u8 x1, u8 y1) {
@@ -408,7 +412,7 @@ void sparksInit(void) {
 #define AMB_ID (16 * 4)
 
 static u8 ambOn, ambStar, ambFlip;
-static s16 ambX, ambY, ambDX, ambDY; /* 8.8 */
+static s32 ambX, ambY, ambDX, ambDY; /* 8.8 in 32 bits: x spans -16..272 */
 static u16 ambCool;
 
 void ambientFrame(void) {
@@ -421,14 +425,14 @@ void ambientFrame(void) {
         ambStar = (rngNext() & 3) == 0; /* 1 in 4 spawns is a shooting star */
         if (ambStar) {
             ambFlip = rngNext() & 1;
-            ambX = (s16)(40 + (rngNext() % 150)) << 8;
-            ambY = (s16)(-12) << 8;
+            ambX = (s32)(40 + (rngNext() & 127)) << 8;
+            ambY = -((s32)12 << 8);
             ambDX = ambFlip ? -0x0280 : 0x0280; /* 2.5 px/f diagonal */
             ambDY = 0x0200;
         } else {
             ambFlip = rngNext() & 1; /* RTL when set */
-            ambX = ambFlip ? ((s16)256 << 8) : ((s16)(-16) << 8);
-            ambY = (s16)(24 + (rngNext() % 170)) << 8;
+            ambX = ambFlip ? ((s32)256 << 8) : -((s32)16 << 8);
+            ambY = (s32)(20 + (rngNext() & 127) + (rngNext() & 31)) << 8;
             ambDX = ambFlip ? -0x0060 : 0x0060; /* ~0.4 px/f drift */
             ambDY = 0;
         }
@@ -437,8 +441,8 @@ void ambientFrame(void) {
     }
     ambX += ambDX;
     ambY += ambDY;
-    sx = ambX >> 8;
-    sy = ambY >> 8;
+    sx = (s16)(ambX >> 8);
+    sy = (s16)(ambY >> 8);
     if (sx < -16 || sx > 256 || sy > 224) {
         ambOn = 0;
         ambCool = 500 + (rngNext() & 511); /* ~8-17s of empty sky */
@@ -470,15 +474,18 @@ void sparksFrame(u8 frame) {
             if (!spkOn[i]) break;
         }
         if (i < SPARK_N && edgeCount) {
-            u8 e = rngNext() % edgeCount;
-            u8 rev = rngNext() & 1;
+            u8 e, rev;
+            do {
+                e = rngNext() & 127; /* rejection sample: tcc division/modulo is unsafe */
+            } while (e >= edgeCount);
+            rev = rngNext() & 1;
             u8 ax = rev ? edgeX1[e] : edgeX0[e];
             u8 ay = rev ? edgeY1[e] : edgeY0[e];
             u8 bx = rev ? edgeX0[e] : edgeX1[e];
             u8 by = rev ? edgeY0[e] : edgeY1[e];
             u16 m;
-            spkX[i] = (s16)ax << 8;
-            spkY[i] = (s16)ay << 8;
+            spkX[i] = (u16)ax << 8;
+            spkY[i] = (u16)ay << 8;
             /* unsigned divide + explicit sign: tcc-816's signed 16-bit
              * division mangles negative deltas (sparks flew off-board on
              * right-to-left / bottom-to-top runs) */
@@ -495,8 +502,8 @@ void sparksFrame(u8 frame) {
         u16 id = (u16)(13 + i) * 4;
         u16 tile;
         if (!spkOn[i]) continue;
-        spkX[i] += spkDX[i];
-        spkY[i] += spkDY[i];
+        spkX[i] += (u16)spkDX[i];
+        spkY[i] += (u16)spkDY[i];
         spkT[i]++;
         if (spkT[i] >= SPARK_DUR) {
             spkOn[i] = 0;
