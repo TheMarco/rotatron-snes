@@ -15,6 +15,28 @@ u8 curK, curJ;
 static u8 animTick; /* 0xFF = no spin in flight */
 static u8 animCcw, animK, animJ;
 
+/* Heat = the run timer (port of state.js, Q15: 32768 = full).
+ * Drain: 0.00886/s (phase-1 multiplier = 1) -> 4.84/frame, accumulated in
+ * 1/256ths so no fraction is lost. Gain: 0.18*n^2 per cleared wave. */
+#define HEAT_FULL 32768U
+#define HEAT_DRAIN_256 1239 /* 32768 * 0.00886 / 60 * 256 */
+#define HEAT_DANGER 9830    /* 0.3 */
+static u16 heat, heatAcc;
+static u8 gameOver;
+static u16 hexCount;
+static u16 entropy; /* free-running; seeds the RNG on restart */
+
+static void heatGain(u8 n) {
+    /* 0.18*32768 = 5898; n>=3 saturates anyway */
+    u16 g = (n == 1) ? 5898 : (n == 2) ? 23592 : 32767;
+    heat = (heat > HEAT_FULL - g) ? HEAT_FULL : heat + g;
+}
+
+static void hudRefresh(void) {
+    hudText(1, 1, "HEX");
+    hudNum(5, 1, hexCount, 4);
+}
+
 /* Cascade clear animation (port of resolveCompletions' visual beat):
  *   GLOW  14 ticks: white-hot flash easing into the hex's neon (one CGRAM
  *                   entry animated per frame), shockwave ring + spokes
@@ -73,6 +95,9 @@ static u8 cascadeCheck(void) {
     pulseStart(cascN, cascHexK, cascHexJ);
     audioSfx(SFX_HEXAGON);
     if (cascDepth >= 2) audioSfx(SFX_EXTRABONUS); /* cascade escalation layer */
+    heatGain(cascN);
+    hexCount += cascN;
+    hudRefresh();
     return cascN;
 }
 
@@ -121,6 +146,47 @@ void gameInit(void) {
     animTick = 0xFF;
     cascState = CASC_IDLE;
     cascDepth = 0;
+    heat = HEAT_FULL;
+    heatAcc = 0;
+    gameOver = 0;
+    hexCount = 0;
+    entropy = 0;
+    hudRefresh();
+}
+
+/* Heat drain + bar/color update; runs every frame while alive (the web game
+ * also drains during spins and cascades). */
+static void heatFrame(void) {
+    u16 t;
+    heatAcc += HEAT_DRAIN_256;
+    t = heatAcc >> 8;
+    heatAcc &= 0xFF;
+    heat = (heat > t) ? heat - t : 0;
+    hudBarSet((u8)((((heat >> 7) * 240) >> 8)));
+    /* green when hot, through amber, to red in the danger zone */
+    t = heat >> 11; /* 0..16 */
+    heatColorSet(lerpBGR(0x001F, 0x03E0, (u8)t));
+}
+
+static void enterGameOver(void) {
+    gameOver = 1;
+    audioSfx(SFX_GAMEOVER);
+    spinAnimEnd();
+    pulseEnd();
+    hudText(11, 12, "GAME OVER");
+    hudText(9, 14, "PRESS  START");
+}
+
+static void restartRun(void) {
+    u8 t;
+    rngSeed(entropy ^ (rngNext() << 1) ^ 0x1d2b); /* human-timed entropy */
+    boardInit(3);
+    seamsInit();
+    for (t = 0; t < N_TRIANGLES; t++) triDisp[t] = 0xFF;
+    hudText(11, 12, "         ");
+    hudText(9, 14, "            ");
+    gameInit();
+    boardRebuildMap();
 }
 
 /* Score a candidate move: primary axis distance dominates, the off-axis
@@ -155,6 +221,18 @@ static void moveCursor(u8 dir) {
 }
 
 void gameFrame(u16 pressed) {
+    entropy += 1 + (pressed & 15); /* press timing feeds restart seeds */
+
+    if (gameOver) {
+        if (pressed & KEY_START) restartRun();
+        return;
+    }
+    heatFrame();
+    if (heat == 0 && animTick == 0xFF && cascState == CASC_IDLE) {
+        enterGameOver();
+        return;
+    }
+
     /* A spin in flight owns the frame: advance the eased schedule, then bake
      * the carry into the board (the rotation IS the state change). */
     if (animTick != 0xFF) {

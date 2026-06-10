@@ -8,6 +8,7 @@ extern char board_pic, board_picend, board_pal;
 extern char cursor_pic, cursor_picend, cursor_pal;
 extern char spin_pic, pulse_pic, spark_pic, ambient_pic;
 extern char bg2_pic, bg2_picend, bg2_map, bg2_pal;
+extern char hudfont_pic;
 
 static u16 mapBuf[32 * 32];
 static u8 mapDirty;
@@ -26,6 +27,11 @@ static u8 lineDirty;
 static u16 twBuf[TWINKLE_N]; /* backdrop twinkle colors, staged for vblank */
 static u8 twDirty;
 static u16 bg2X, bg2Y; /* backdrop drift accumulators (8.8) */
+static u16 hudMap[32 * 32];
+static u8 hudDirty;
+static u16 heatColor;
+static u8 heatColorDirty;
+static u8 barPx = 0xFF; /* current bar fill, 0..240 */
 
 void renderInit(void) {
     u16 i;
@@ -48,6 +54,37 @@ void renderInit(void) {
     setPalette((u8 *)&bg2_pal, 112, 16 * 2);
     bgSetGfxPtr(1, VRAM_BG2_TILES);
     bgSetMapPtr(1, VRAM_BG2_MAP, SC_32x32);
+
+    /* BG3: HUD. Deadfall's transparent 2bpp font (white on transparent,
+     * ASCII 32..95) + 9 procedurally built heat-bar fill tiles at 64..72.
+     * 2bpp sub-palette 7 = CGRAM 28..31: those sit in BG1 sub-pal 1's
+     * unused tail, so nothing collides. 29=white, 30=dark, 31=heat color. */
+    dmaCopyVram((u8 *)&hudfont_pic, VRAM_BG3_TILES, 1024);
+    {
+        static u8 bar[9 * 16];
+        u16 o = 0;
+        u8 f, r2, mask;
+        for (f = 0; f < 9; f++) {
+            mask = (f == 0) ? 0 : (u8)(0xFF << (8 - f));
+            for (r2 = 0; r2 < 8; r2++) {
+                if (r2 == 0 || r2 == 7) {
+                    bar[o++] = 0xFF; /* white border line (idx 1) */
+                    bar[o++] = 0x00;
+                } else {
+                    bar[o++] = mask; /* fill = idx 3, rest = idx 2 (dark) */
+                    bar[o++] = 0xFF;
+                }
+            }
+        }
+        dmaCopyVram(bar, (u16)(VRAM_BG3_TILES + 64 * 8), sizeof(bar));
+    }
+    setPaletteColor(29, 0x7FFF); /* HUD white */
+    setPaletteColor(30, 0x0C63); /* HUD dark backing */
+    setPaletteColor(31, 0x03E0); /* heat color (staged per frame after) */
+    bgSetGfxPtr(2, VRAM_BG3_TILES);
+    bgSetMapPtr(2, VRAM_BG3_MAP, SC_32x32);
+    for (i = 0; i < 32 * 32; i++) hudMap[i] = 0;
+    hudDirty = 1;
 
     /* OBJ tiles. Spin frames fill tiles 0..383: tiles 0..255 live in the
      * first name table (word 0x6000), 256+ in the second (base + 8KB ->
@@ -72,8 +109,9 @@ void renderInit(void) {
     mapDirty = 1;
 
     setMode(BG_MODE1, 0);
-    videoMode = 0x13; /* BG1 + BG2 + OBJ */
-    REG_TM = 0x13;
+    REG_BGMODE = 0x09; /* mode 1 + BG3 priority: HUD above everything */
+    videoMode = 0x17;  /* BG1 + BG2 + BG3 + OBJ */
+    REG_TM = 0x17;
 
     setScreenOn();
 }
@@ -147,6 +185,15 @@ void renderVBlank(void) {
     bg2X += 0x0020; /* 7.5 px/s */
     bg2Y -= 0x0010;
     bgSetScroll(1, (u16)(bg2X >> 8) & 0xFF, (u16)(((bg2Y >> 8) - 1) & 0xFF));
+    bgSetScroll(2, 0, 0x3FF);
+    if (hudDirty) {
+        dmaCopyVram((u8 *)hudMap, VRAM_BG3_MAP, 0x800);
+        hudDirty = 0;
+    }
+    if (heatColorDirty) {
+        dmaCopyCGram((u8 *)&heatColor, 31, 2);
+        heatColorDirty = 0;
+    }
     if (mapDirty) {
         dmaCopyVram((u8 *)mapBuf, VRAM_BG1_MAP, 0x800);
         mapDirty = 0;
@@ -488,6 +535,49 @@ void sparksFrame(u8 frame) {
         oamSet(id, (u16)(spkX[i] >> 8) - 8, (u16)(spkY[i] >> 8) - 9, 3, 0, 0, tile, 0);
         oamSetEx(id, OBJ_SMALL, OBJ_SHOW);
     }
+}
+
+/* BG3 entries: glyph | sub-pal 7 | tile-priority (with BGMODE bit 3 that
+ * lifts the HUD above every layer and sprite). */
+#define HUD_ATTR ((u16)(7 << 10) | 0x2000)
+#define BAR_BASE 64
+
+void hudText(u8 x, u8 y, const char *s) {
+    u16 *p = &hudMap[(u16)y * 32 + x];
+    while (*s) {
+        *p++ = (u16)(*s - 32) | HUD_ATTR;
+        s++;
+    }
+    hudDirty = 1;
+}
+
+void hudNum(u8 x, u8 y, u16 val, u8 digits) {
+    u16 *p = &hudMap[(u16)y * 32 + x + digits];
+    u8 i;
+    for (i = 0; i < digits; i++) {
+        *--p = (u16)('0' - 32 + (val % 10)) | HUD_ATTR;
+        val /= 10;
+    }
+    hudDirty = 1;
+}
+
+void hudBarSet(u8 px) {
+    u8 col, full, rem;
+    u16 *row = &hudMap[1];
+    if (px == barPx) return;
+    barPx = px;
+    full = px >> 3;
+    rem = px & 7;
+    for (col = 0; col < 30; col++) {
+        u8 lvl = (col < full) ? 8 : (col == full ? rem : 0);
+        row[col] = (u16)(BAR_BASE + lvl) | HUD_ATTR;
+    }
+    hudDirty = 1;
+}
+
+void heatColorSet(u16 bgr) {
+    heatColor = bgr;
+    heatColorDirty = 1;
 }
 
 void cursorUpdate(u8 k, u8 j, u8 frame) {

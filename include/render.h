@@ -13,6 +13,8 @@
  */
 #define VRAM_BG1_MAP 0x0000
 #define VRAM_BG2_MAP 0x0400
+#define VRAM_BG3_MAP 0x0800
+#define VRAM_BG3_TILES 0x0C00 /* 2bpp font (64 glyphs) + heat bar tiles */
 #define VRAM_BG1_TILES 0x1000
 #define VRAM_BG2_TILES 0x2000 /* up to 1024 tiles, ends at OBJ base */
 #define VRAM_OBJ_TILES 0x6000
@@ -62,5 +64,12 @@ void sparksInit(void);           /* enumerate interior seams (after boardInit) *
 void sparksFrame(u8 frame);      /* spawn/advance seam sparks (call per frame) */
 void ambientFrame(void);         /* ships / shooting stars behind the board */
 void twinkleFrame(u8 frame);     /* backdrop star palette twinkle */
+
+/* HUD (BG3, 2bpp, top priority). Text font = ASCII 32..95. The heat bar
+ * fills cols 1..30 of row 0; its color is staged per frame. */
+void hudText(u8 x, u8 y, const char *s);
+void hudNum(u8 x, u8 y, u16 val, u8 digits);
+void hudBarSet(u8 px);     /* 0..240 filled pixels */
+void heatColorSet(u16 bgr);
 
 #endif

@@ -30,6 +30,11 @@ pulse_pic: .incbin "res/pulse.pic"
 spark_pic: .incbin "res/spark.pic"
 .ends
 
+; ---- HUD font (deadfall hud_font2t: 2bpp, ASCII 32-95, transparent bg) ----
+.section ".rodata_hudfont" superfree
+hudfont_pic: .incbin "res/hudfont.pic"
+.ends
+
 ; ---- Ambient sky sprites (ship + shooting star, 16x16 each) ----
 .section ".rodata_ambient" superfree
 ambient_pic: .incbin "res/ambient.pic"
