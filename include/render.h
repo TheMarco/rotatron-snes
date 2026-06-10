@@ -56,6 +56,7 @@ void triRefresh(u8 t);        /* recompute one triangle's cells */
 void ringRefresh(u8 k, u8 j); /* recompute the 6 on-board ring triangles */
 void renderVBlank(void);      /* call right after WaitForVBlank: DMA dirty map */
 void cursorUpdate(u8 k, u8 j, u8 frame);
+void renderCursorHide(u8 hide);
 
 /* Spin animation: Begin stages OBJ palette 1 with the ring's colors (CCW =
  * permuted for the H-flipped frames) and blanks the ring's BG cells, keeping

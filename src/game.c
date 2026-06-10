@@ -45,11 +45,19 @@ static const u16 drain256ByPhase[5] = {0, 1239, 1512, 1784, 2057}; /* +22%/phase
 #define STG_NONE 0
 #define STG_FLASH 1
 #define STG_OUT 2
-#define STG_PANEL 3
-#define STG_IN 4
+#define STG_DOWN 3 /* fade to black; the heavy swaps happen AT black */
+#define STG_UP 4
+#define STG_PANEL 5
+#define STG_IN 6
 #define STG_PANEL_HOLD 200
 static u8 stageState, pendingPhase, stageDone;
 static u16 stageTick;
+
+/* Color elimination (rules.js): a color wiped from every non-affected cell
+ * during a wave gets suppressed from refills for 4 spins and pays
+ * 1500 * freshMult * 2^(phase-1). No heat reward, by design. */
+static u8 suppress[6];
+static u8 elimBanner; /* COLOR CLEARED banner countdown */
 
 /* Score (BCD) + freshness. fm10 locks at the first wave of a cascade. */
 static u8 score[SCORE_DIGITS];
@@ -96,6 +104,20 @@ static u8 cascHexK[19], cascHexJ[19];
 static u8 affMask[N_TRIANGLES];
 static u16 cascNeon; /* glow target: the cleared hex's line color */
 
+/* Refill picker: active colors minus the suppressed ones; if suppression
+ * would empty the pool, fall back to the full set (refills never stall). */
+static u8 pickRefill(void) {
+    u8 pool[6], n = 0, c, r;
+    for (c = 0; c < activeColors; c++) {
+        if (!suppress[c]) pool[n++] = c;
+    }
+    if (!n) return rngColor(activeColors);
+    do {
+        r = (u8)(rngNext() & 7);
+    } while (r >= n);
+    return pool[r];
+}
+
 static void setAffDisp(u8 disp) {
     u8 t;
     for (t = 0; t < N_TRIANGLES; t++) {
@@ -125,6 +147,7 @@ static u8 cascadeCheck(void) {
                 stageTick = 0;
                 audioSfx(SFX_LEVELUP);
                 shakeStart(2, 14);
+                renderCursorHide(1); /* no cursor over the ceremony */
             }
         }
         return 0;
@@ -189,9 +212,32 @@ static void cascadeFrame(void) {
             u8 t = (u8)(((u16)cascTick * 16) / (FADE_TICKS - 1));
             glowSet(lerpBGR(cascNeon, 0, t));
             if (++cascTick >= FADE_TICKS) {
-                u8 t2;
+                u8 t2, c, extra = 0;
+                u8 present[6];
+                /* Color elimination: a color absent from every NON-affected
+                 * cell just got wiped. Checked between fade-out and refill,
+                 * exactly like resolveCompletions. */
+                for (c = 0; c < 6; c++) present[c] = 0;
                 for (t2 = 0; t2 < N_TRIANGLES; t2++) {
-                    if (affMask[t2]) boardColor[triRow[t2]][triCol[t2]] = rngColor(activeColors);
+                    if (!affMask[t2]) present[boardColor[triRow[t2]][triCol[t2]]] = 1;
+                }
+                for (c = 0; c < activeColors; c++) {
+                    if (!present[c] && !suppress[c]) {
+                        suppress[c] = 4; /* out of the refill pool for 4 spins */
+                        /* 1500 * fm * 2^(p-1) -> 150 * fm10 * 2^(p-1), max 24000 */
+                        bcdAdd(score, (u16)(150 * fmLocked) << (phase - 1));
+                        extra++;
+                    }
+                }
+                if (extra) {
+                    audioSfxPitch(SFX_COLORELIM, (u8)(1 + extra)); /* up per extra */
+                    hudText(9, 8, "COLOR CLEARED");
+                    elimBanner = 80;
+                    shakeStart(2, 10);
+                    hudRefresh();
+                }
+                for (t2 = 0; t2 < N_TRIANGLES; t2++) {
+                    if (affMask[t2]) boardColor[triRow[t2]][triCol[t2]] = pickRefill();
                 }
                 setAffDisp(DISP_WHITE); /* pop-in flash over the new colors */
                 cascState = CASC_IN;
@@ -239,18 +285,26 @@ static void stageFrame(u16 pressed) {
             mosaicSet((u8)(stageTick >> 1));
             pulseTick((u8)(stageTick & 31));
             if (++stageTick >= 32) {
+                stageState = STG_DOWN;
+                stageTick = 0;
+            }
+            break;
+
+        case STG_DOWN: /* fade out; everything heavy happens AT black */
+            setBrightness((u8)(15 - stageTick));
+            if (++stageTick > 15) {
                 static const u8 phaseMod[5] = {0, MOD_MUSIC_LEVEL1, MOD_MUSIC_LEVEL2,
                                                MOD_MUSIC_LEVEL3, MOD_MUSIC_LEVEL4};
-                /* the new phase lands while the board is dissolved */
                 phase = pendingPhase;
                 activeColors = 2 + phase;
                 phantomReseed(activeColors);
                 heat = (heat > HEAT_FULL - 13107) ? HEAT_FULL : heat + 13107; /* +0.4 */
-                audioPlayMusic(phaseMod[phase]); /* frozen frame, mosaic'd anyway */
+                audioPlayMusic(phaseMod[phase]); /* blocking load: invisible at black */
                 setScreenOff();
                 bg2LoadPhase(phase);
                 twinkleSelect(phase - 1);
-                setScreenOn();
+                setScreenOn(); /* still brightness 0 */
+                setBrightness(0);
                 hudBox(6, 9, 20, 7);
                 hudText(8, 10, "STAGE");
                 hudNum(14, 10, stageDone, 1);
@@ -261,7 +315,17 @@ static void stageFrame(u16 pressed) {
                 hudDigits(15, 13, score, SCORE_DIGITS);
                 hudText(9, 14, "HEAT BONUS UP");
                 hudRefresh();
+                stageState = STG_UP;
+                stageTick = 0;
+            }
+            break;
+
+        case STG_UP: /* fade back in onto the stats panel */
+            setBrightness((u8)stageTick);
+            if (++stageTick > 15) {
+                setBrightness(15);
                 audioSfx(SFX_EXTRABONUS);
+                celebrate();
                 stageState = STG_PANEL;
                 stageTick = 0;
             }
@@ -283,6 +347,7 @@ static void stageFrame(u16 pressed) {
             mosaicSet((u8)(15 - (stageTick >> 1)));
             if (++stageTick >= 32) {
                 mosaicSet(0);
+                renderCursorHide(0);
                 stageState = STG_NONE;
             }
             break;
@@ -303,6 +368,11 @@ void gameInit(void) {
     phase = 1;
     activeColors = 3;
     stageState = STG_NONE;
+    {
+        u8 c;
+        for (c = 0; c < 6; c++) suppress[c] = 0;
+    }
+    elimBanner = 0;
     bcdClear(score);
     spinsSince = 0;
     fmLocked = 20;
@@ -390,6 +460,9 @@ void gameFrame(u16 pressed) {
         if (pressed & KEY_START) restartRun();
         return;
     }
+    if (elimBanner && --elimBanner == 0) {
+        hudText(9, 8, "             ");
+    }
     if (stageState) { /* stage-complete transition: heat + input on hold */
         stageFrame(pressed);
         return;
@@ -406,11 +479,15 @@ void gameFrame(u16 pressed) {
         spinAnimFrame(animK, animJ, animCcw, spinSched[animTick]);
         animTick++;
         if (animTick >= SPIN_TICKS) {
+            u8 c;
             spinAnimEnd();
             spinApply(animK, animJ, animCcw);
             ringRefresh(animK, animJ);
             animTick = 0xFF;
             if (spinsSince < 255) spinsSince++;
+            for (c = 0; c < 6; c++) { /* tickColorSuppression: per spin */
+                if (suppress[c]) suppress[c]--;
+            }
             cascadeCheck(); /* the spin may have completed hexes */
         }
         return;

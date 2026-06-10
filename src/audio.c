@@ -34,6 +34,10 @@ void audioSfx(u8 idx) {
     spcEffect(2, idx, 15 * 16 + 8); /* pitch=2 (8kHz), vol=15, pan=center */
 }
 
+void audioSfxPitch(u8 idx, u8 pitch) { /* 2 = natural; higher = up-shifted */
+    spcEffect(pitch, idx, 15 * 16 + 8);
+}
+
 void audioFrame(void) {
     spcProcess(); /* feed the sound engine every frame */
 }

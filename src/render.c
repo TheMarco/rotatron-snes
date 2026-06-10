@@ -799,9 +799,17 @@ void hudBox(u8 x, u8 y, u8 w, u8 h) {
     hudDirty = 1;
 }
 
+static u8 cursorHidden;
+
+void renderCursorHide(u8 hide) {
+    cursorHidden = hide;
+    if (hide) oamSetVisible(OAM_CURSOR, OBJ_HIDE);
+}
+
 void cursorUpdate(u8 k, u8 j, u8 frame) {
     u16 x = VTX_PX_X(k) - 8;
     u16 y = VTX_PX_Y(j) - 8 - 1; /* OAM sprites display one line low */
+    if (cursorHidden) return;
     oamSet(OAM_CURSOR, x, y, 3, 0, 0, CURSOR_TILE, 0);
     oamSetEx(OAM_CURSOR, OBJ_SMALL, OBJ_SHOW);
     /* gentle blink: ~0.7s on, ~0.2s off */
