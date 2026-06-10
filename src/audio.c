@@ -1,7 +1,7 @@
-/* snesmod audio: looping BGM (music/level1.mid -> chiptune module) + the
- * web game's sampled SFX as resident effects (8kHz, music/s-*.mp3).
- * spcLoad re-inits ARAM, so effects load after the music module. Everything
- * here is blocking boot-time work. */
+/* snesmod audio: three looping BGM modules (title / level1 / gameover, from
+ * music/*.mid -> chiptune) + the web game's sampled SFX as resident effects.
+ * spcLoad is BLOCKING and wipes ARAM (effects reload after every module
+ * swap) - call audioPlayMusic only at scene changes. */
 #include <snes.h>
 #include "audio.h"
 #include "audio_sfx.h"
@@ -10,6 +10,15 @@
 
 #define MUSIC_VOLUME 96 /* 0..255; SFX play at full volume on top */
 
+void audioPlayMusic(u8 mod) {
+    u8 i;
+    spcStop();
+    spcLoad(mod);
+    for (i = 0; i < SFX_COUNT; i++) spcLoadEffect(i);
+    spcSetModuleVolume(MUSIC_VOLUME);
+    spcPlay(0);
+}
+
 void audioInit(void) {
     u8 i;
     spcBoot();
@@ -17,10 +26,7 @@ void audioInit(void) {
     spcStop();
     spcLoad(MOD_SFX); /* effects bank: makes its samples the global effects */
     for (i = 0; i < SFX_COUNT; i++) spcLoadEffect(i);
-    spcLoad(MOD_MUSIC_LEVEL1); /* wipes ARAM -> effects reload below */
-    for (i = 0; i < SFX_COUNT; i++) spcLoadEffect(i);
-    spcSetModuleVolume(MUSIC_VOLUME);
-    spcPlay(0);
+    audioPlayMusic(MOD_MUSIC_TITLE); /* covers the logo drop + title */
 }
 
 void audioSfx(u8 idx) {

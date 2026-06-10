@@ -7,7 +7,7 @@ endif
 
 # snesmod soundbank: the SFX bank MUST be first (its samples are the global
 # effects; order also fixes the MOD_ indices used in audio.c).
-MUSICFILES := res/music_level1.it
+MUSICFILES := res/music_level1.it res/music_title.it res/music_gameover.it
 AUDIOFILES := res/sfx.it $(MUSICFILES)
 export SOUNDBANK := res/soundbank
 
@@ -54,7 +54,9 @@ gfx:
 # Rebuild music modules from music/*.mid (also writes res/*_preview.wav)
 # and the SFX bank from music/s-*.mp3.
 songs:
-	python3 tools/mid2it.py music/level1.mid level1
+	python3 tools/mid2it.py music/level1.mid level1 175
+	python3 tools/mid2it.py music/title.mid title
+	python3 tools/mid2it.py music/gameover.mid gameover
 	python3 tools/build_audio.py
 
 # Host-side golden tests: compile the core game logic with clang and compare

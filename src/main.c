@@ -12,6 +12,7 @@
 #include "game.h"
 #include "audio.h"
 #include "audio_sfx.h"
+#include "res/soundbank.h"
 
 #define SC_LOGO 0
 #define SC_TITLE 1
@@ -102,6 +103,7 @@ int main(void) {
                 if (pressed & KEY_START) {
                     rngSeed(bootFrames ^ (rngNext() << 1) ^ 0x5a5a);
                     setScreenOff();
+                    audioPlayMusic(MOD_MUSIC_LEVEL1); /* blocking, masked by the blank */
                     renderGameLoad(); /* the title owned VRAM/CGRAM: reload all */
                     boardInit(3);
                     gameInit();

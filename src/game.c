@@ -9,6 +9,7 @@
 #include "game.h"
 #include "audio.h"
 #include "audio_sfx.h"
+#include "res/soundbank.h"
 
 u8 curK, curJ;
 
@@ -236,16 +237,17 @@ static void heatFrame(void) {
 
 static void enterGameOver(void) {
     gameOver = 1;
-    audioSfx(SFX_GAMEOVER);
     spinAnimEnd();
     pulseEnd();
     hudText(11, 12, "GAME OVER");
     hudText(9, 14, "PRESS  START");
+    audioPlayMusic(MOD_MUSIC_GAMEOVER); /* blocking ~0.5s: a beat of stillness */
 }
 
 static void restartRun(void) {
     u8 t;
     rngSeed(entropy ^ (rngNext() << 1) ^ 0x1d2b); /* human-timed entropy */
+    audioPlayMusic(MOD_MUSIC_LEVEL1);
     boardInit(3);
     seamsInit();
     for (t = 0; t < N_TRIANGLES; t++) triDisp[t] = 0xFF;

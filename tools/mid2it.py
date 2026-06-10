@@ -30,8 +30,8 @@ C5_SPEED = int(round(WAVE_LEN * C5_HZ))
 DRATE = 16000                         # drum-sample rate
 ROWS_PER_PAT = 64
 R = 8                                 # rows per quarter note (32nd-note grid)
-TARGET_BPM = 175                      # level1.mid is authored at 152; the user wants it
-                                      # +15% (152*1.15). None = keep the MIDI's own tempo.
+TARGET_BPM = None                     # default: keep each MIDI's own tempo. Override per
+                                      # song with the optional 3rd CLI arg (bpm).
 NOTE_OFF = 255                        # IT "===" -> release the instrument envelope
 
 np.random.seed(1234)                  # deterministic drum noise
@@ -399,12 +399,15 @@ def build_combined(frantic_src, calm_src, name):
 
 # --------------------------------------------------------------------- main --
 def main():
+    global TARGET_BPM
     if len(sys.argv) > 1 and sys.argv[1] == "--combine":
         # mid2it.py --combine FRANTIC.mid CALM.mid OUTNAME
         build_combined(sys.argv[2], sys.argv[3], sys.argv[4])
         return
     src = sys.argv[1] if len(sys.argv) > 1 else "test.mid"
     name = sys.argv[2] if len(sys.argv) > 2 else os.path.splitext(os.path.basename(src))[0]
+    if len(sys.argv) > 3:
+        TARGET_BPM = int(sys.argv[3])
     build_standalone(src, name)
 
 
