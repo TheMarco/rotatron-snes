@@ -46,6 +46,9 @@ int main(void) {
     sceneShow(2); /* studio logo, parked above the screen */
     scenePinV((u16)(LOGO_TARGET - LOGO_START - 1));
     renderVBlank();
+    /* From here every upload runs from the NMI at the START of vblank
+     * (deadfall pattern); the loop below never calls renderVBlank again. */
+    nmiSet(renderVBlank);
     WaitForVBlank();
     setScreenOn();
 
@@ -133,8 +136,7 @@ int main(void) {
         }
 
         audioFrame();
-        WaitForVBlank();
-        renderVBlank();
+        WaitForVBlank(); /* uploads happen inside the NMI (nmiSet hook) */
     }
     return 0;
 }

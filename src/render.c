@@ -305,6 +305,12 @@ void ringRefresh(u8 k, u8 j) {
     }
 }
 
+/* All VRAM/CGRAM uploads + scroll asserts. Installed as the NMI hook
+ * (nmiSet) so it runs at the VERY START of vblank: called after
+ * WaitForVBlank it raced the vblank end, and on accurate hardware (bsnes)
+ * the spilled writes were redirected to the PPU's live fetch address -
+ * random tile corruption. Also still called directly during force-blank
+ * boot/transition loads (safe: it only consumes staged state). */
 void renderVBlank(void) {
     if (sceneMode) { /* logo / title: pinned scroll + the blink entry only */
         bgSetScroll(0, 0, sceneV);
