@@ -49,6 +49,7 @@ run: all
 gfx:
 	python3 tools/build_board_gfx.py
 	python3 tools/build_backdrop.py
+	python3 tools/build_logo.py
 
 # Rebuild music modules from music/*.mid (also writes res/*_preview.wav)
 # and the SFX bank from music/s-*.mp3.

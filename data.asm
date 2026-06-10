@@ -40,6 +40,20 @@ hudfont_pic: .incbin "res/hudfont.pic"
 ambient_pic: .incbin "res/ambient.pic"
 .ends
 
+; ---- Title screen (backdrops/title.png) + studio logo (from deadfall) ----
+.section ".rodata_title" superfree
+title_pic: .incbin "res/title.pic"
+title_picend:
+title_map: .incbin "res/title.map"
+title_pal: .incbin "res/title.pal"
+.ends
+.section ".rodata_logo" superfree
+logo2_pic: .incbin "res/logo2.pic"
+logo2_picend:
+logo2_map: .incbin "res/logo2.map"
+logo2_pal: .incbin "res/logo2.pal"
+.ends
+
 ; ---- BG2 backdrop (quantized backdrops/level1.png) ----
 ; The pic alone nearly fills a 32KB LoROM bank, so it gets its own
 ; superfree section; map+pal live separately (deadfall bgtex pattern).

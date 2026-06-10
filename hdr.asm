@@ -10,7 +10,7 @@
 .ENDME
 
 .ROMBANKSIZE $8000
-.ROMBANKS 8                     ; 2 Mbit (256 KB); bump as art + audio grow
+.ROMBANKS 16                    ; 4 Mbit (512 KB): title + logo + backdrop + soundbank
 
 .SNESHEADER
   ID "SNES"
@@ -23,7 +23,7 @@
                                 ; the Makefile patches $7FD5 -> $30 post-link
 
   CARTRIDGETYPE $00             ; ROM only (SRAM hiscore comes later)
-  ROMSIZE $08                   ; 2 Megabits (256 KB)
+  ROMSIZE $09                   ; 4 Megabits (512 KB)
   SRAMSIZE $00
   COUNTRY $01                   ; USA / NTSC
   LICENSEECODE $00

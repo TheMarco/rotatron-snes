@@ -36,15 +36,18 @@ def encode_tile(px):
     return bytes(planes)
 
 
-def main():
-    im = Image.open(ROOT / "backdrops/level1.png").convert("RGB")
-    if im.size != (W, H):
+def convert(im, name, full_h=None):
+    """RGB image -> res/<name>.pic/.map/.pal (BG2, sub-palette 7). full_h is
+    the source height to map (256 for seamless wrap, 224 for screens)."""
+    w = W
+    h = full_h if full_h else im.height
+    if im.size != (w, h):
         iw, ih = im.size
-        sc = max(W / iw, H / ih)
+        sc = max(w / iw, h / ih)
         im = im.resize((round(iw * sc), round(ih * sc)), Image.LANCZOS)
-        left = (im.width - W) // 2
-        top = (im.height - H) // 2
-        im = im.crop((left, top, left + W, top + H))
+        left = (im.width - w) // 2
+        top = (im.height - h) // 2
+        im = im.crop((left, top, left + w, top + h))
 
     q = im.quantize(colors=15, dither=Image.Dither.NONE)
     qpal = q.getpalette()[: 15 * 3]
@@ -59,8 +62,8 @@ def main():
     tiles = [bytes(32)]  # tile 0 = blank
     canonical = {tuple(tuple([0] * 8) for _ in range(8)): 0}
     entries = []
-    for ty in range(H // 8):
-        for tx in range(W // 8):
+    for ty in range(h // 8):
+        for tx in range(w // 8):
             t = tuple(tuple(qpx[tx * 8 + x, ty * 8 + y] + 1 for x in range(8))
                       for y in range(8))
             ent = None
@@ -76,20 +79,26 @@ def main():
                 ent = tid
             entries.append(ent | (7 << 10))  # sub-palette 7
 
-    assert len(tiles) <= 1024, f"{len(tiles)} BG2 tiles"
-    (ROOT / "res/bg2.pic").write_bytes(b"".join(tiles))
+    assert len(tiles) <= 1024, f"{len(tiles)} BG2 tiles ({name})"
+    (ROOT / f"res/{name}.pic").write_bytes(b"".join(tiles))
 
     mp = bytearray()
-    for e in entries:
-        mp += bytes((e & 0xFF, e >> 8))
-    (ROOT / "res/bg2.map").write_bytes(mp)
+    for ty in range(32):
+        for tx in range(32):
+            e = entries[ty * 32 + tx] if ty < h // 8 else 0
+            mp += bytes((e & 0xFF, e >> 8))
+    (ROOT / f"res/{name}.map").write_bytes(mp)
 
     pal = bytearray(2)  # slot 0 transparent/black
     for i in range(15):
         r, g, b = qpal[i * 3], qpal[i * 3 + 1], qpal[i * 3 + 2]
-        w = (b >> 3) << 10 | (g >> 3) << 5 | (r >> 3)
-        pal += bytes((w & 0xFF, w >> 8))
-    (ROOT / "res/bg2.pal").write_bytes(pal)
+        wv = (b >> 3) << 10 | (g >> 3) << 5 | (r >> 3)
+        pal += bytes((wv & 0xFF, wv >> 8))
+    (ROOT / f"res/{name}.pal").write_bytes(pal)
+
+    if name != "bg2":
+        print(f"{name}: {len(tiles)} tiles ({len(tiles) * 32} bytes)")
+        return
 
     # Twinkle table: the brightest palette slots (usually star cores in a
     # space backdrop) get gentle CGRAM brightness cycling at runtime.
@@ -108,6 +117,11 @@ def main():
     (ROOT / "include/bg2tab.h").write_text("\n".join(lines))
 
     print(f"bg2: {len(tiles)} tiles ({len(tiles) * 32} bytes), twinkle slots {lum}")
+
+
+def main():
+    convert(Image.open(ROOT / "backdrops/level1.png").convert("RGB"), "bg2", 256)
+    convert(Image.open(ROOT / "backdrops/title.png").convert("RGB"), "title", 224)
 
 
 if __name__ == "__main__":

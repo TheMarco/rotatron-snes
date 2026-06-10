@@ -85,6 +85,12 @@ void hudDots(u8 n);        /* phase color dots (active color count) */
 void hudScore(const u8 *d); /* SCORE_DIGITS BCD digits, LSB first */
 void hudValNum(u8 x, u16 val, u8 digits); /* lowered value-row number */
 void hudValX(u8 x);                       /* lowered value-row 'X' */
+
+/* Scene plumbing (logo -> title -> play). */
+void bg2Load(u8 which);        /* 0 game backdrop, 1 title, 2 logo; screen off! */
+void bg2Pin(u8 manual, u16 vofs);
+void renderLayers(u8 tm);      /* REG_TM bits: 1 BG1, 2 BG2, 4 BG3, 0x10 OBJ */
+void hudClear(void);
 void hudBox(u8 x, u8 y, u8 w, u8 h); /* 1px-bordered panel ring */
 
 #endif

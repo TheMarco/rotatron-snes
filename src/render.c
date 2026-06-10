@@ -8,6 +8,8 @@ extern char board_pic, board_picend, board_pal;
 extern char cursor_pic, cursor_picend, cursor_pal;
 extern char spin_pic, pulse_pic, spark_pic, ambient_pic;
 extern char bg2_pic, bg2_picend, bg2_map, bg2_pal;
+extern char title_pic, title_picend, title_map, title_pal;
+extern char logo2_pic, logo2_picend, logo2_map, logo2_pal;
 extern char hudfont_pic;
 
 static u16 mapBuf[32 * 32];
@@ -27,6 +29,8 @@ static u8 lineDirty;
 static u16 twBuf[TWINKLE_N]; /* backdrop twinkle colors, staged for vblank */
 static u8 twDirty;
 static u16 bg2X, bg2Y; /* backdrop drift accumulators (8.8) */
+static u8 bg2Manual;   /* scenes pin BG2 scroll instead of drifting */
+static u16 bg2ManualV;
 static u16 hudMap[32 * 32];
 static u8 hudDirty;
 static u16 heatColor;
@@ -227,11 +231,15 @@ void renderVBlank(void) {
     } else {
         bgSetScroll(0, 0, BOARD_VOFS);
     }
-    /* Seamless backdrop drifts down-left: 1px steps every 8/16 frames -
-     * frequent enough to read as motion (slower made each 1px hop visible). */
-    bg2X += 0x0020; /* 7.5 px/s */
-    bg2Y -= 0x0010;
-    bgSetScroll(1, (u16)(bg2X >> 8) & 0xFF, (u16)(((bg2Y >> 8) - 1) & 0xFF));
+    if (bg2Manual) {
+        bgSetScroll(1, 0, bg2ManualV); /* logo drop / title: pinned */
+    } else {
+        /* Seamless backdrop drifts down-left: 1px steps every 8/16 frames -
+         * frequent enough to read as motion (slower hops looked choppy). */
+        bg2X += 0x0020; /* 7.5 px/s */
+        bg2Y -= 0x0010;
+        bgSetScroll(1, (u16)(bg2X >> 8) & 0xFF, (u16)(((bg2Y >> 8) - 1) & 0xFF));
+    }
     bgSetScroll(2, 0, 0x3FF);
     if (heatColorDirty) {
         dmaCopyCGram((u8 *)&heatColor, 31, 2);
@@ -596,6 +604,37 @@ void sparksFrame(u8 frame) {
  * lifts the HUD above every layer and sprite). */
 #define HUD_ATTR ((u16)(7 << 10) | 0x2000)
 #define BAR_BASE HUD_BAR_TILE
+
+/* Scene plumbing: swap the BG2 art (call with the screen force-blanked),
+ * pin/release its scroll, choose visible layers, wipe the HUD. */
+void bg2Load(u8 which) { /* 0 = game backdrop, 1 = title, 2 = logo */
+    u8 *pic = (which == 1) ? (u8 *)&title_pic : (which == 2) ? (u8 *)&logo2_pic : (u8 *)&bg2_pic;
+    u16 len = (which == 1) ? (u16)(&title_picend - &title_pic)
+              : (which == 2) ? (u16)(&logo2_picend - &logo2_pic)
+                             : (u16)(&bg2_picend - &bg2_pic);
+    u8 *map = (which == 1) ? (u8 *)&title_map : (which == 2) ? (u8 *)&logo2_map : (u8 *)&bg2_map;
+    u8 *pal = (which == 1) ? (u8 *)&title_pal : (which == 2) ? (u8 *)&logo2_pal : (u8 *)&bg2_pal;
+    dmaCopyVram(pic, VRAM_BG2_TILES, len);
+    dmaCopyVram(map, VRAM_BG2_MAP, 0x800);
+    dmaCopyCGram(pal, 112, 32);
+}
+
+void bg2Pin(u8 manual, u16 vofs) {
+    bg2Manual = manual;
+    bg2ManualV = vofs;
+}
+
+void renderLayers(u8 tm) {
+    videoMode = tm;
+    REG_TM = tm;
+}
+
+void hudClear(void) {
+    u16 i;
+    for (i = 0; i < 32 * 32; i++) hudMap[i] = 0;
+    barPx = 0xFF;
+    hudDirty = 1;
+}
 
 void hudText(u8 x, u8 y, const char *s) {
     u16 *p = &hudMap[(u16)y * 32 + x];
