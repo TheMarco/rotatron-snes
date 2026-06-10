@@ -32,9 +32,11 @@ rom: $(ROMNAME).sfc
 run: all
 	@bash tools/run_openemu.sh
 
-# Generate board tileset/palette/tables + PNG preview from the geometry spec.
+# Generate board tileset/palette/tables + PNG preview from the geometry spec,
+# and the BG2 backdrop from backdrops/level1.png.
 gfx:
 	python3 tools/build_board_gfx.py
+	python3 tools/build_backdrop.py
 
 # Host-side golden tests: compile the core game logic with clang and compare
 # against vectors generated from the web game's JS modules.

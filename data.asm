@@ -24,3 +24,11 @@ cursor_pal: .incbin "res/cursor.pal"
 .section ".rodata_pulse" superfree
 pulse_pic: .incbin "res/pulse.pic"
 .ends
+
+; ---- BG2 backdrop (quantized backdrops/level1.png, ~30KB: own bank) ----
+.section ".rodata_bg2" superfree
+bg2_pic: .incbin "res/bg2.pic"
+bg2_picend:
+bg2_map: .incbin "res/bg2.map"
+bg2_pal: .incbin "res/bg2.pal"
+.ends

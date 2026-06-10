@@ -12,7 +12,9 @@
  *   0x6000  OBJ tiles (cursor; spin animation frames later)
  */
 #define VRAM_BG1_MAP 0x0000
+#define VRAM_BG2_MAP 0x0400
 #define VRAM_BG1_TILES 0x1000
+#define VRAM_BG2_TILES 0x2000 /* up to 1024 tiles, ends at OBJ base */
 #define VRAM_OBJ_TILES 0x6000
 
 /* Board placement: the generated region is 208x184 (8px margin around the

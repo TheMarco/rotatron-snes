@@ -6,6 +6,7 @@
 extern char board_pic, board_picend, board_pal;
 extern char cursor_pic, cursor_picend, cursor_pal;
 extern char spin_pic, pulse_pic;
+extern char bg2_pic, bg2_picend, bg2_map, bg2_pal;
 
 static u16 mapBuf[32 * 32];
 static u8 mapDirty;
@@ -35,6 +36,13 @@ void renderInit(void) {
     bgSetGfxPtr(0, VRAM_BG1_TILES);
     bgSetMapPtr(0, VRAM_BG1_MAP, SC_32x32);
 
+    /* BG2: full-screen backdrop art behind the board (sub-palette 7). */
+    dmaCopyVram((u8 *)&bg2_pic, VRAM_BG2_TILES, (u16)(&bg2_picend - &bg2_pic));
+    dmaCopyVram((u8 *)&bg2_map, VRAM_BG2_MAP, 0x800);
+    setPalette((u8 *)&bg2_pal, 112, 16 * 2);
+    bgSetGfxPtr(1, VRAM_BG2_TILES);
+    bgSetMapPtr(1, VRAM_BG2_MAP, SC_32x32);
+
     /* OBJ tiles. Spin frames fill tiles 0..383: tiles 0..255 live in the
      * first name table (word 0x6000), 256+ in the second (base + 8KB ->
      * word 0x7000). Cursor 16x16 at tile 384 (TL/TR) + 400 (BL/BR). */
@@ -52,8 +60,8 @@ void renderInit(void) {
     mapDirty = 1;
 
     setMode(BG_MODE1, 0);
-    videoMode = 0x11; /* BG1 + OBJ */
-    REG_TM = 0x11;
+    videoMode = 0x13; /* BG1 + BG2 + OBJ */
+    REG_TM = 0x13;
 
     setScreenOn();
 }
@@ -122,6 +130,7 @@ void renderVBlank(void) {
     } else {
         bgSetScroll(0, 0, BOARD_VOFS);
     }
+    bgSetScroll(1, 0, 0x3FF); /* backdrop pinned at screen origin (-1 quirk) */
     if (mapDirty) {
         dmaCopyVram((u8 *)mapBuf, VRAM_BG1_MAP, 0x800);
         mapDirty = 0;

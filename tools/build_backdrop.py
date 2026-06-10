@@ -1,0 +1,100 @@
+#!/usr/bin/env python3
+"""Convert backdrops/level1.png into the BG2 backdrop layer.
+
+256x256 source -> center-cropped 256x224, quantized to 15 colors (BG
+sub-palette 7, slot 0 transparent), 8x8 tiles deduplicated across H/V flips.
+Outputs res/bg2.pic / res/bg2.map / res/bg2.pal. The board (BG1) renders on
+top; everything outside the hex and under blanked spin cells shows this.
+"""
+
+from pathlib import Path
+from PIL import Image
+
+ROOT = Path(__file__).resolve().parent.parent
+W, H = 256, 224
+
+
+def encode_tile(px):
+    planes = bytearray(32)
+    for y in range(8):
+        b0 = b1 = b2 = b3 = 0
+        for x in range(8):
+            c = px[y][x]
+            bit = 0x80 >> x
+            if c & 1:
+                b0 |= bit
+            if c & 2:
+                b1 |= bit
+            if c & 4:
+                b2 |= bit
+            if c & 8:
+                b3 |= bit
+        planes[y * 2] = b0
+        planes[y * 2 + 1] = b1
+        planes[16 + y * 2] = b2
+        planes[16 + y * 2 + 1] = b3
+    return bytes(planes)
+
+
+def main():
+    im = Image.open(ROOT / "backdrops/level1.png").convert("RGB")
+    if im.size != (W, H):
+        iw, ih = im.size
+        sc = max(W / iw, H / ih)
+        im = im.resize((round(iw * sc), round(ih * sc)), Image.LANCZOS)
+        left = (im.width - W) // 2
+        top = (im.height - H) // 2
+        im = im.crop((left, top, left + W, top + H))
+
+    q = im.quantize(colors=15, dither=Image.Dither.NONE)
+    qpal = q.getpalette()[: 15 * 3]
+    qpx = q.load()
+
+    def hflip(t):
+        return tuple(tuple(row[::-1]) for row in t)
+
+    def vflip(t):
+        return tuple(t[7 - y] for y in range(8))
+
+    tiles = [bytes(32)]  # tile 0 = blank
+    canonical = {tuple(tuple([0] * 8) for _ in range(8)): 0}
+    entries = []
+    for ty in range(H // 8):
+        for tx in range(W // 8):
+            t = tuple(tuple(qpx[tx * 8 + x, ty * 8 + y] + 1 for x in range(8))
+                      for y in range(8))
+            ent = None
+            for cand, flips in ((t, 0), (hflip(t), 0x4000), (vflip(t), 0x8000),
+                                (vflip(hflip(t)), 0xC000)):
+                if cand in canonical:
+                    ent = canonical[cand] | flips
+                    break
+            if ent is None:
+                tid = len(tiles)
+                tiles.append(encode_tile([list(r) for r in t]))
+                canonical[t] = tid
+                ent = tid
+            entries.append(ent | (7 << 10))  # sub-palette 7
+
+    assert len(tiles) <= 1024, f"{len(tiles)} BG2 tiles"
+    (ROOT / "res/bg2.pic").write_bytes(b"".join(tiles))
+
+    mp = bytearray()
+    for ty in range(32):
+        for tx in range(32):
+            e = entries[ty * 32 + tx] if ty < H // 8 else 0
+            mp += bytes((e & 0xFF, e >> 8))
+    (ROOT / "res/bg2.map").write_bytes(mp)
+
+    pal = bytearray(2)  # slot 0 transparent/black
+    for i in range(15):
+        r, g, b = qpal[i * 3], qpal[i * 3 + 1], qpal[i * 3 + 2]
+        w = (b >> 3) << 10 | (g >> 3) << 5 | (r >> 3)
+        pal += bytes((w & 0xFF, w >> 8))
+    (ROOT / "res/bg2.pal").write_bytes(pal)
+
+    print(f"bg2: {len(tiles)} tiles ({len(tiles) * 32} bytes)")
+
+
+if __name__ == "__main__":
+    main()
