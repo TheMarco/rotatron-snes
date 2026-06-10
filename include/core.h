@@ -49,6 +49,13 @@ void boardInit(u8 paletteLen);     /* createBoard (re-roll until no completed he
 void phantomReseed(u8 paletteLen); /* reseedPhantomSlots: re-roll hidden colors on phase change */
 u8 boardHasCompletedHex(void);
 
+/* Interior seam segments (both triangles on board), vertex-unit endpoints.
+ * Golden-tested; the spark layer reads these directly. */
+#define MAX_SEAMS 96
+extern u8 seamK0[MAX_SEAMS], seamJ0[MAX_SEAMS], seamK1[MAX_SEAMS], seamJ1[MAX_SEAMS];
+extern u8 seamCount;
+void seamsInit(void);
+
 /* Completed hexes: vertices whose 6 on-board ring slots share one color.
  * Out arrays must hold 19 entries (max = interior vertex count). */
 u8 findCompletedHexes(u8 *outK, u8 *outJ, u8 *outColor);

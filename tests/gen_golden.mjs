@@ -5,7 +5,7 @@
 // RNG: xorshift16, identical to src/core/rng.c. The patched Math.random
 // returns next()/65536, so the JS `Math.floor(random()*len)` is bit-identical
 // to the C `(next()*len)>>16` (exact in doubles for len<=6).
-import { ring, key, ROWS, COLS } from '../../hex-spin/src/utils/math.js';
+import { ring, key, ROWS, COLS, triangleVertices } from '../../hex-spin/src/utils/math.js';
 import {
   createBoard,
   createPhantomSlots,
@@ -71,6 +71,36 @@ let board = createBoard(paletteOf(3));
 let phantoms = createPhantomSlots(board, paletteOf(3));
 lines.push('INIT');
 dump(board, phantoms);
+
+// Interior seams, derived INDEPENDENTLY of the C enumeration: shared corner
+// vertices via triangleVertices() set intersection, same scan order as
+// seamsInit so the lists diff verbatim.
+{
+  const on = (c, r) => !!board[key(c, r)];
+  const shared = (c1, r1, c2, r2) => {
+    const b = new Set(triangleVertices(c2, r2).map(([k, j]) => `${k},${j}`));
+    return triangleVertices(c1, r1)
+      .filter(([k, j]) => b.has(`${k},${j}`))
+      .map(([k, j]) => [k, j]);
+  };
+  for (let j = 1; j < ROWS; j++) {
+    for (let k = 0; k + 2 <= COLS; k++) {
+      if (((k + j) & 1) === 0) continue;
+      if (!on(k, j - 1) || !on(k, j)) continue;
+      const e = shared(k, j - 1, k, j).sort((a, b2) => a[0] - b2[0]);
+      if (e.length !== 2) throw new Error(`bad horizontal seam ${k},${j}`);
+      lines.push(`E ${e[0][0]} ${e[0][1]} ${e[1][0]} ${e[1][1]}`);
+    }
+  }
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c + 1 < COLS; c++) {
+      if (!on(c, r) || !on(c + 1, r)) continue;
+      const e = shared(c, r, c + 1, r).sort((a, b2) => a[1] - b2[1]); // top first
+      if (e.length !== 2) throw new Error(`bad diagonal seam ${c},${r}`);
+      lines.push(`E ${e[0][0]} ${e[0][1]} ${e[1][0]} ${e[1][1]}`);
+    }
+  }
+}
 
 const RESEEDS = { 150: 4, 250: 5, 325: 6 }; // spin index -> new palette length
 for (let n = 0; n < 400; n++) {

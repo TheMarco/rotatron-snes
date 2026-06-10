@@ -142,9 +142,10 @@ void renderVBlank(void) {
     } else {
         bgSetScroll(0, 0, BOARD_VOFS);
     }
-    /* Seamless backdrop drifts slowly down-left (8.8 accumulators). */
-    bg2X += 0x000C; /* ~2.8 px/s */
-    bg2Y -= 0x0006;
+    /* Seamless backdrop drifts down-left: 1px steps every 8/16 frames -
+     * frequent enough to read as motion (slower made each 1px hop visible). */
+    bg2X += 0x0020; /* 7.5 px/s */
+    bg2Y -= 0x0010;
     bgSetScroll(1, (u16)(bg2X >> 8) & 0xFF, (u16)(((bg2Y >> 8) - 1) & 0xFF));
     if (mapDirty) {
         dmaCopyVram((u8 *)mapBuf, VRAM_BG1_MAP, 0x800);
@@ -354,10 +355,7 @@ void pulseEnd(void) {
 #define SPARK_N 3
 #define SPARK_TILE 480
 #define SPARK_DUR 36
-#define MAX_EDGES 96
 
-static u8 edgeX0[MAX_EDGES], edgeY0[MAX_EDGES], edgeX1[MAX_EDGES], edgeY1[MAX_EDGES];
-static u8 edgeCount;
 /* Positions are UNSIGNED 8.8: screen x up to 228 -> 58k, which overflows
  * s16 (that bug put sparks 'outside in space' on the right half of the
  * board). Deltas stay s16; u16 += s16 is exact modulo arithmetic. */
@@ -366,40 +364,9 @@ static u16 spkX[SPARK_N], spkY[SPARK_N];
 static s16 spkDX[SPARK_N], spkDY[SPARK_N];
 static u8 spkCool;
 
-static void addEdge(u8 x0, u8 y0, u8 x1, u8 y1) {
-    if (edgeCount >= MAX_EDGES) return;
-    edgeX0[edgeCount] = x0;
-    edgeY0[edgeCount] = y0;
-    edgeX1[edgeCount] = x1;
-    edgeY1[edgeCount] = y1;
-    edgeCount++;
-}
-
-static u8 onBoard(s8 c, s8 r) {
-    return c >= 0 && c < BOARD_COLS && r >= 0 && r < BOARD_ROWS && boardColor[r][c] != NO_CELL;
-}
-
 void sparksInit(void) {
-    u8 c, r, j, k, i;
-    edgeCount = 0;
-    /* horizontal seams: up(col=k,row=j-1) above, down(col=k,row=j) below */
-    for (j = 1; j < BOARD_ROWS; j++) {
-        for (k = 0; k + 2 <= BOARD_COLS; k++) {
-            if (((k + j) & 1) == 0) continue;
-            if (onBoard(k, j - 1) && onBoard(k, j))
-                addEdge(VTX_PX_X(k), VTX_PX_Y(j), VTX_PX_X(k + 2), VTX_PX_Y(j));
-        }
-    }
-    /* diagonal seams between horizontally adjacent triangles */
-    for (r = 0; r < BOARD_ROWS; r++) {
-        for (c = 0; c + 1 < BOARD_COLS; c++) {
-            if (!onBoard(c, r) || !onBoard(c + 1, r)) continue;
-            if (((c + r) & 1) == 0) /* up | down: edge falls down-right */
-                addEdge(VTX_PX_X(c + 1), VTX_PX_Y(r), VTX_PX_X(c + 2), VTX_PX_Y(r + 1));
-            else                    /* down | up: edge falls down-left */
-                addEdge(VTX_PX_X(c + 2), VTX_PX_Y(r), VTX_PX_X(c + 1), VTX_PX_Y(r + 1));
-        }
-    }
+    u8 i;
+    seamsInit(); /* golden-tested seam list in core (vertex units) */
     for (i = 0; i < SPARK_N; i++) spkOn[i] = 0;
     spkCool = 30;
 }
@@ -411,12 +378,18 @@ void sparksInit(void) {
 #define AMB_STAR_TILE 388
 #define AMB_ID (16 * 4)
 
+/* Pure 16-bit, all-positive coordinates: 9.7 fixed point with a +32px bias
+ * (tcc-816's 32-bit helpers proved as unreliable as its signed division -
+ * the s32 version made flyers pop in and out at the screen edges).
+ * Biased x spans 16..288 (-16..256 on screen): 288<<7 = 36864, fits u16. */
+#define AMB_BIAS 32
 static u8 ambOn, ambStar, ambFlip;
-static s32 ambX, ambY, ambDX, ambDY; /* 8.8 in 32 bits: x spans -16..272 */
+static u16 ambX, ambY; /* biased 9.7 */
+static s16 ambDX, ambDY;
 static u16 ambCool;
 
 void ambientFrame(void) {
-    s16 sx, sy;
+    u16 bx, by;
     if (!ambOn) {
         if (ambCool) {
             ambCool--;
@@ -425,31 +398,31 @@ void ambientFrame(void) {
         ambStar = (rngNext() & 3) == 0; /* 1 in 4 spawns is a shooting star */
         if (ambStar) {
             ambFlip = rngNext() & 1;
-            ambX = (s32)(40 + (rngNext() & 127)) << 8;
-            ambY = -((s32)12 << 8);
-            ambDX = ambFlip ? -0x0280 : 0x0280; /* 2.5 px/f diagonal */
-            ambDY = 0x0200;
+            ambX = (u16)(AMB_BIAS + 40 + (rngNext() & 127)) << 7;
+            ambY = (u16)(AMB_BIAS - 12) << 7;
+            ambDX = ambFlip ? -0x0140 : 0x0140; /* 2.5 px/f diagonal */
+            ambDY = 0x0100;
         } else {
             ambFlip = rngNext() & 1; /* RTL when set */
-            ambX = ambFlip ? ((s32)256 << 8) : -((s32)16 << 8);
-            ambY = (s32)(20 + (rngNext() & 127) + (rngNext() & 31)) << 8;
-            ambDX = ambFlip ? -0x0060 : 0x0060; /* ~0.4 px/f drift */
+            ambX = (u16)(ambFlip ? AMB_BIAS + 256 : AMB_BIAS - 16) << 7;
+            ambY = (u16)(AMB_BIAS + 20 + (rngNext() & 127) + (rngNext() & 31)) << 7;
+            ambDX = ambFlip ? -0x0030 : 0x0030; /* ~0.4 px/f drift */
             ambDY = 0;
         }
         ambOn = 1;
         return;
     }
-    ambX += ambDX;
-    ambY += ambDY;
-    sx = (s16)(ambX >> 8);
-    sy = (s16)(ambY >> 8);
-    if (sx < -16 || sx > 256 || sy > 224) {
+    ambX += (u16)ambDX;
+    ambY += (u16)ambDY;
+    bx = ambX >> 7; /* biased pixels, 0..511 */
+    by = ambY >> 7;
+    if (bx < AMB_BIAS - 16 || bx > AMB_BIAS + 256 || by > AMB_BIAS + 224) {
         ambOn = 0;
         ambCool = 500 + (rngNext() & 511); /* ~8-17s of empty sky */
         oamSetVisible(AMB_ID, OBJ_HIDE);
         return;
     }
-    oamSet(AMB_ID, (u16)sx, (u16)(sy - 1), 2, ambFlip, 0,
+    oamSet(AMB_ID, (u16)(bx - AMB_BIAS), (u16)(by - AMB_BIAS - 1), 2, ambFlip, 0,
            ambStar ? AMB_STAR_TILE : AMB_SHIP_TILE, 0);
     oamSetEx(AMB_ID, OBJ_SMALL, OBJ_SHOW);
 }
@@ -473,17 +446,17 @@ void sparksFrame(u8 frame) {
         for (i = 0; i < SPARK_N; i++) {
             if (!spkOn[i]) break;
         }
-        if (i < SPARK_N && edgeCount) {
-            u8 e, rev;
+        if (i < SPARK_N && seamCount) {
+            u8 e, rev, ax, ay, bx, by;
+            u16 m;
             do {
                 e = rngNext() & 127; /* rejection sample: tcc division/modulo is unsafe */
-            } while (e >= edgeCount);
+            } while (e >= seamCount);
             rev = rngNext() & 1;
-            u8 ax = rev ? edgeX1[e] : edgeX0[e];
-            u8 ay = rev ? edgeY1[e] : edgeY0[e];
-            u8 bx = rev ? edgeX0[e] : edgeX1[e];
-            u8 by = rev ? edgeY0[e] : edgeY1[e];
-            u16 m;
+            ax = VTX_PX_X(rev ? seamK1[e] : seamK0[e]);
+            ay = VTX_PX_Y(rev ? seamJ1[e] : seamJ0[e]);
+            bx = VTX_PX_X(rev ? seamK0[e] : seamK1[e]);
+            by = VTX_PX_Y(rev ? seamJ0[e] : seamJ1[e]);
             spkX[i] = (u16)ax << 8;
             spkY[i] = (u16)ay << 8;
             /* unsigned divide + explicit sign: tcc-816's signed 16-bit

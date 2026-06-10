@@ -49,10 +49,14 @@ static void dumpHexes(void) {
 
 int main(void) {
     int n;
+    u8 si;
     rngSeed(0xbeef);
     boardInit(3);
     printf("INIT\n");
     dump();
+    seamsInit();
+    for (si = 0; si < seamCount; si++)
+        printf("E %d %d %d %d\n", seamK0[si], seamJ0[si], seamK1[si], seamJ1[si]);
 
     for (n = 0; n < 400; n++) {
         u8 k, j, ccw;
