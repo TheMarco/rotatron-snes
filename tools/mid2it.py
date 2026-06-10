@@ -30,8 +30,8 @@ C5_SPEED = int(round(WAVE_LEN * C5_HZ))
 DRATE = 16000                         # drum-sample rate
 ROWS_PER_PAT = 64
 R = 8                                 # rows per quarter note (32nd-note grid)
-TARGET_BPM = 130                      # force every track to this tempo (the user's sweet
-                                      # spot); set to None to keep each MIDI's own tempo
+TARGET_BPM = None                     # keep each MIDI's own tempo (the deadfall-era 130
+                                      # force made rotatron's 152bpm level1 drag)
 NOTE_OFF = 255                        # IT "===" -> release the instrument envelope
 
 np.random.seed(1234)                  # deterministic drum noise
