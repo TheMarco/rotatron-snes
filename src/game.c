@@ -107,6 +107,9 @@ static u8 cascadeCheck(void) {
             u8 target = (hexCount >= PHASE_T4) ? 4 : (hexCount >= PHASE_T3) ? 3
                         : (hexCount >= PHASE_T2) ? 2 : 1;
             if (target > phase && phase < 4) {
+                /* phase music: 4 reuses level3 until a level4.mid exists */
+                static const u8 phaseMod[5] = {0, MOD_MUSIC_LEVEL1, MOD_MUSIC_LEVEL2,
+                                               MOD_MUSIC_LEVEL3, MOD_MUSIC_LEVEL3};
                 phase = target;
                 activeColors = 2 + phase;
                 phantomReseed(activeColors); /* new color flows in from the rim */
@@ -116,6 +119,7 @@ static u8 cascadeCheck(void) {
                 hudNum(18, 12, phase, 1);
                 bannerTick = 96; /* ~1.6s: input + heat paused, like the web */
                 hudRefresh();
+                audioPlayMusic(phaseMod[phase]); /* blocking, hidden in the banner pause */
             }
         }
         return 0;
