@@ -34,10 +34,22 @@ static void heatGain(u8 n) {
 }
 
 /* Phases (state.js): 1..4, +1 active color each; the phase's NEW color is
- * color index phase+1 and scores double. Banner pauses heat + input. */
+ * color index phase+1 and scores double. */
 static u8 phase, activeColors;
-static u8 bannerTick; /* >0: PHASE N announcement in progress */
 static const u16 drain256ByPhase[5] = {0, 1239, 1512, 1784, 2057}; /* +22%/phase */
+
+/* Stage-complete transition: strobe + shake -> the board mosaic-dissolves
+ * into blocks -> STAGE N COMPLETE stats panel with celebration shockwaves
+ * (theme music + backdrop morph underneath) -> mosaic reveal -> play.
+ * Heat and input pause throughout; START skips the panel hold. */
+#define STG_NONE 0
+#define STG_FLASH 1
+#define STG_OUT 2
+#define STG_PANEL 3
+#define STG_IN 4
+#define STG_PANEL_HOLD 200
+static u8 stageState, pendingPhase, stageDone;
+static u16 stageTick;
 
 /* Score (BCD) + freshness. fm10 locks at the first wave of a cascade. */
 static u8 score[SCORE_DIGITS];
@@ -107,24 +119,12 @@ static u8 cascadeCheck(void) {
             u8 target = (hexCount >= PHASE_T4) ? 4 : (hexCount >= PHASE_T3) ? 3
                         : (hexCount >= PHASE_T2) ? 2 : 1;
             if (target > phase && phase < 4) {
-                static const u8 phaseMod[5] = {0, MOD_MUSIC_LEVEL1, MOD_MUSIC_LEVEL2,
-                                               MOD_MUSIC_LEVEL3, MOD_MUSIC_LEVEL4};
-                phase = target;
-                activeColors = 2 + phase;
-                phantomReseed(activeColors); /* new color flows in from the rim */
-                heat = (heat > HEAT_FULL - 13107) ? HEAT_FULL : heat + 13107; /* +0.4 */
+                stageDone = phase; /* the stage just finished */
+                pendingPhase = target;
+                stageState = STG_FLASH;
+                stageTick = 0;
                 audioSfx(SFX_LEVELUP);
-                hudText(12, 12, "PHASE");
-                hudNum(18, 12, phase, 1);
-                bannerTick = 96; /* ~1.6s: input + heat paused, like the web */
-                hudRefresh();
-                /* theme swap: music load freezes a visible frame (fine), the
-                 * backdrop needs one blanked frame for its 32KB DMA */
-                audioPlayMusic(phaseMod[phase]);
-                setScreenOff();
-                bg2LoadPhase(phase);
-                twinkleSelect(phase - 1);
-                setScreenOn();
+                shakeStart(2, 14);
             }
         }
         return 0;
@@ -209,6 +209,86 @@ static void cascadeFrame(void) {
     }
 }
 
+/* Fire 4 celebration shockwaves at random hinges. */
+static void celebrate(void) {
+    u8 ks[4], js[4], i, k, j;
+    for (i = 0; i < 4; i++) {
+        do {
+            k = rngNext() & 15;
+            j = rngNext() & 7;
+        } while (k >= VTX_COLS || !vertexValid[j][k]);
+        ks[i] = k;
+        js[i] = j;
+    }
+    pulseStart(4, ks, js);
+}
+
+static void stageFrame(u16 pressed) {
+    switch (stageState) {
+        case STG_FLASH: /* white strobe over the frozen board */
+            setBrightness((stageTick & 2) ? 9 : 15);
+            if (++stageTick >= 12) {
+                setBrightness(15);
+                stageState = STG_OUT;
+                stageTick = 0;
+                celebrate();
+            }
+            break;
+
+        case STG_OUT: /* the board dissolves into blocks */
+            mosaicSet((u8)(stageTick >> 1));
+            pulseTick((u8)(stageTick & 31));
+            if (++stageTick >= 32) {
+                static const u8 phaseMod[5] = {0, MOD_MUSIC_LEVEL1, MOD_MUSIC_LEVEL2,
+                                               MOD_MUSIC_LEVEL3, MOD_MUSIC_LEVEL4};
+                /* the new phase lands while the board is dissolved */
+                phase = pendingPhase;
+                activeColors = 2 + phase;
+                phantomReseed(activeColors);
+                heat = (heat > HEAT_FULL - 13107) ? HEAT_FULL : heat + 13107; /* +0.4 */
+                audioPlayMusic(phaseMod[phase]); /* frozen frame, mosaic'd anyway */
+                setScreenOff();
+                bg2LoadPhase(phase);
+                twinkleSelect(phase - 1);
+                setScreenOn();
+                hudBox(6, 9, 20, 7);
+                hudText(8, 10, "STAGE");
+                hudNum(14, 10, stageDone, 1);
+                hudText(16, 10, "COMPLETE");
+                hudText(9, 12, "HEXES");
+                hudNum(18, 12, hexCount, 4);
+                hudText(9, 13, "SCORE");
+                hudDigits(15, 13, score, SCORE_DIGITS);
+                hudText(9, 14, "HEAT BONUS UP");
+                hudRefresh();
+                audioSfx(SFX_EXTRABONUS);
+                stageState = STG_PANEL;
+                stageTick = 0;
+            }
+            break;
+
+        case STG_PANEL: /* stats hold + looping celebration shockwaves */
+            if ((stageTick & 31) == 0) celebrate();
+            pulseTick((u8)(stageTick & 31));
+            if (++stageTick >= STG_PANEL_HOLD || (pressed & KEY_START)) {
+                pulseEnd();
+                hudClear();
+                hudRefresh();
+                stageState = STG_IN;
+                stageTick = 0;
+            }
+            break;
+
+        default: /* STG_IN: the board re-forms over the new backdrop */
+            mosaicSet((u8)(15 - (stageTick >> 1)));
+            if (++stageTick >= 32) {
+                mosaicSet(0);
+                stageState = STG_NONE;
+            }
+            break;
+    }
+}
+
 void gameInit(void) {
     curK = 6;
     curJ = 3; /* board center vertex */
@@ -222,7 +302,7 @@ void gameInit(void) {
     entropy = 0;
     phase = 1;
     activeColors = 3;
-    bannerTick = 0;
+    stageState = STG_NONE;
     bcdClear(score);
     spinsSince = 0;
     fmLocked = 20;
@@ -310,10 +390,8 @@ void gameFrame(u16 pressed) {
         if (pressed & KEY_START) restartRun();
         return;
     }
-    if (bannerTick) { /* PHASE N announcement: heat + input on hold */
-        if (--bannerTick == 0) {
-            hudText(12, 12, "       ");
-        }
+    if (stageState) { /* stage-complete transition: heat + input on hold */
+        stageFrame(pressed);
         return;
     }
     heatFrame();

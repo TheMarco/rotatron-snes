@@ -33,6 +33,7 @@ static u8 lineDirty;
 static u16 twBuf[TWINKLE_N]; /* backdrop twinkle colors, staged for vblank */
 static u8 twDirty;
 static u8 twSet; /* which backdrop's twinkle palette set (phase - 1) */
+static u8 mosVal; /* BG1 mosaic size, re-asserted every vblank */
 static u16 bg2X, bg2Y; /* backdrop drift accumulators (8.8) */
 static u8 sceneMode;   /* mode-3 boot scene active: minimal vblank path */
 static u16 sceneV;     /* pinned BG1 vscroll during scenes */
@@ -172,6 +173,7 @@ void renderGameLoad(void) {
     setMode(BG_MODE1, 0);
     REG_BGMODE = 0x09;  /* mode 1 + BG3 priority: HUD above everything */
     REG_SETINI = 0x04;  /* 239-line overscan: buys the board's lower position */
+    mosVal = 0;
     videoMode = 0x17;   /* BG1 + BG2 + BG3 + OBJ */
     REG_TM = 0x17;
     sceneMode = 0;
@@ -284,6 +286,7 @@ void renderVBlank(void) {
     } else {
         bgSetScroll(0, 0, BOARD_VOFS);
     }
+    REG_MOSAIC = (u8)((mosVal << 4) | (mosVal ? 0x01 : 0)); /* board dissolve */
     /* Seamless backdrop drifts down-left: 1px steps every 8/16 frames -
      * frequent enough to read as motion (slower hops looked choppy). */
     bg2X += 0x0020; /* 7.5 px/s */
@@ -668,6 +671,19 @@ void bg2LoadPhase(u8 phase) {
 
 void twinkleSelect(u8 idx) {
     twSet = idx;
+}
+
+void mosaicSet(u8 size) {
+    mosVal = size;
+}
+
+void hudDigits(u8 x, u8 y, const u8 *d, u8 n) {
+    u8 i;
+    u16 *p = &hudMap[(u16)y * 32 + x];
+    for (i = 0; i < n; i++) {
+        p[i] = (u16)(HUD_FONT_TILE + '0' - 32 + d[n - 1 - i]) | HUD_ATTR;
+    }
+    hudDirty = 1;
 }
 
 void hudClear(void) {

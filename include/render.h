@@ -42,6 +42,7 @@
 #define BOARD_PX_Y 68
 #define BOARD_VOFS ((u16)(0x400 - 61))
 #define REG_SETINI (*(vuint8 *)0x2133)
+#define REG_MOSAIC (*(vuint8 *)0x2106)
 
 #define VTX_PX_X(k) (BOARD_PX_X + ((k) << 4))
 #define VTX_PX_Y(j) (BOARD_PX_Y + (j) * 24)
@@ -101,6 +102,8 @@ void sceneBlink(u16 bgr); /* CGRAM 255 = the baked PRESS START text */
 void hudClear(void);
 void bg2LoadPhase(u8 phase); /* per-phase backdrop; screen must be blanked */
 void twinkleSelect(u8 idx);  /* twinkle palette set (phase - 1) */
+void mosaicSet(u8 size);     /* BG1 mosaic 0..15, applied in vblank */
+void hudDigits(u8 x, u8 y, const u8 *d, u8 n); /* BCD digits, MSB first */
 void hudBox(u8 x, u8 y, u8 w, u8 h); /* 1px-bordered panel ring */
 
 #endif
