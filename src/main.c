@@ -45,6 +45,8 @@ int main(void) {
 
     sceneShow(2); /* studio logo, parked above the screen */
     scenePinV((u16)(LOGO_TARGET - LOGO_START - 1));
+    renderVBlank();
+    WaitForVBlank();
     setScreenOn();
 
     while (1) {
@@ -84,7 +86,9 @@ int main(void) {
                     }
                     if (logoTimer == 0) {
                         setScreenOff();
+                        audioPlayMusic(MOD_MUSIC_TITLE); /* theme starts WITH the title */
                         sceneShow(1); /* title art, texts baked in */
+                        WaitForVBlank();
                         setScreenOn();
                         scene = SC_TITLE;
                     }
@@ -111,6 +115,7 @@ int main(void) {
                     boardRebuildMap();
                     renderVBlank(); /* board map (blank = free bandwidth) */
                     renderVBlank(); /* HUD map + staged palettes */
+                    WaitForVBlank(); /* un-blank ON a vblank: no half-set frame */
                     setScreenOn();
                     scene = SC_PLAY;
                 }

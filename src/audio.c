@@ -26,7 +26,8 @@ void audioInit(void) {
     spcStop();
     spcLoad(MOD_SFX); /* effects bank: makes its samples the global effects */
     for (i = 0; i < SFX_COUNT; i++) spcLoadEffect(i);
-    audioPlayMusic(MOD_MUSIC_TITLE); /* covers the logo drop + title */
+    /* No music yet: the logo drops in silence (impact SFX only); the title
+     * theme starts when the title appears. */
 }
 
 void audioSfx(u8 idx) {

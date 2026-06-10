@@ -35,8 +35,13 @@
  * shows map line n + VOFS + 1 -> VOFS = -45. */
 #define BOARD_TILE_X 3
 #define BOARD_PX_X 32
-#define BOARD_PX_Y 52
-#define BOARD_VOFS ((u16)(0x400 - 45))
+/* Board pushed 16px further down at the user's request: this needs the
+ * 239-line OVERSCAN mode (SETINI bit 2, play scene only) - the bottom pin
+ * halos end exactly on line 239. Real CRTs crop those lines; emulators show
+ * them. Region top = 60 -> VOFS = -61. */
+#define BOARD_PX_Y 68
+#define BOARD_VOFS ((u16)(0x400 - 61))
+#define REG_SETINI (*(vuint8 *)0x2133)
 
 #define VTX_PX_X(k) (BOARD_PX_X + ((k) << 4))
 #define VTX_PX_Y(j) (BOARD_PX_Y + (j) * 24)

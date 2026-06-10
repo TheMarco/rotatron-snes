@@ -170,8 +170,9 @@ void renderGameLoad(void) {
     mapDirty = 1;
 
     setMode(BG_MODE1, 0);
-    REG_BGMODE = 0x09; /* mode 1 + BG3 priority: HUD above everything */
-    videoMode = 0x17;  /* BG1 + BG2 + BG3 + OBJ */
+    REG_BGMODE = 0x09;  /* mode 1 + BG3 priority: HUD above everything */
+    REG_SETINI = 0x04;  /* 239-line overscan: buys the board's lower position */
+    videoMode = 0x17;   /* BG1 + BG2 + BG3 + OBJ */
     REG_TM = 0x17;
     sceneMode = 0;
     /* Screen stays force-blanked: the caller flushes the initial maps (free
@@ -182,6 +183,7 @@ void renderGameLoad(void) {
  * Call with the screen force-blanked. */
 void sceneShow(u8 which) {
     setMode(BG_MODE3, 0);
+    REG_SETINI = 0x00; /* scenes are 224-line compositions */
     bgSetGfxPtr(0, 0x1000);
     bgSetMapPtr(0, 0x0000, SC_32x32);
     if (which == 1) {
