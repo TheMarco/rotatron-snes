@@ -399,10 +399,16 @@ void sparksFrame(u8 frame) {
             u8 ay = rev ? edgeY1[e] : edgeY0[e];
             u8 bx = rev ? edgeX0[e] : edgeX1[e];
             u8 by = rev ? edgeY0[e] : edgeY1[e];
+            u16 m;
             spkX[i] = (s16)ax << 8;
             spkY[i] = (s16)ay << 8;
-            spkDX[i] = (s16)(((s16)bx - ax) << 8) / SPARK_DUR;
-            spkDY[i] = (s16)(((s16)by - ay) << 8) / SPARK_DUR;
+            /* unsigned divide + explicit sign: tcc-816's signed 16-bit
+             * division mangles negative deltas (sparks flew off-board on
+             * right-to-left / bottom-to-top runs) */
+            m = ((u16)(bx > ax ? bx - ax : ax - bx) << 8) / SPARK_DUR;
+            spkDX[i] = (bx >= ax) ? (s16)m : -(s16)m;
+            m = ((u16)(by > ay ? by - ay : ay - by) << 8) / SPARK_DUR;
+            spkDY[i] = (by >= ay) ? (s16)m : -(s16)m;
             spkT[i] = 0;
             spkOn[i] = 1;
         }
