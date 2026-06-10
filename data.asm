@@ -59,14 +59,31 @@ logo8_map: .incbin "res/logo8.map"
 logo8_pal: .incbin "res/logo8.pal"
 .ends
 
-; ---- BG2 backdrop (quantized backdrops/level1.png) ----
-; The pic alone nearly fills a 32KB LoROM bank, so it gets its own
-; superfree section; map+pal live separately (deadfall bgtex pattern).
-.section ".rodata_bg2pic" superfree
-bg2_pic: .incbin "res/bg2.pic"
-bg2_picend:
+; ---- Per-phase BG2 backdrops (backdrops/level1-4.png). Each pic nearly
+; fills a 32KB LoROM bank -> own section; maps+pals share one section. ----
+.section ".rodata_bgl1pic" superfree
+bgl1_pic: .incbin "res/bgl1.pic"
+bgl1_picend:
 .ends
-.section ".rodata_bg2map" superfree
-bg2_map: .incbin "res/bg2.map"
-bg2_pal: .incbin "res/bg2.pal"
+.section ".rodata_bgl2pic" superfree
+bgl2_pic: .incbin "res/bgl2.pic"
+bgl2_picend:
+.ends
+.section ".rodata_bgl3pic" superfree
+bgl3_pic: .incbin "res/bgl3.pic"
+bgl3_picend:
+.ends
+.section ".rodata_bgl4pic" superfree
+bgl4_pic: .incbin "res/bgl4.pic"
+bgl4_picend:
+.ends
+.section ".rodata_bglmaps" superfree
+bgl1_map: .incbin "res/bgl1.map"
+bgl1_pal: .incbin "res/bgl1.pal"
+bgl2_map: .incbin "res/bgl2.map"
+bgl2_pal: .incbin "res/bgl2.pal"
+bgl3_map: .incbin "res/bgl3.map"
+bgl3_pal: .incbin "res/bgl3.pal"
+bgl4_map: .incbin "res/bgl4.map"
+bgl4_pal: .incbin "res/bgl4.pal"
 .ends

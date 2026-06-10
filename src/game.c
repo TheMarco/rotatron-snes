@@ -107,9 +107,8 @@ static u8 cascadeCheck(void) {
             u8 target = (hexCount >= PHASE_T4) ? 4 : (hexCount >= PHASE_T3) ? 3
                         : (hexCount >= PHASE_T2) ? 2 : 1;
             if (target > phase && phase < 4) {
-                /* phase music: 4 reuses level3 until a level4.mid exists */
                 static const u8 phaseMod[5] = {0, MOD_MUSIC_LEVEL1, MOD_MUSIC_LEVEL2,
-                                               MOD_MUSIC_LEVEL3, MOD_MUSIC_LEVEL3};
+                                               MOD_MUSIC_LEVEL3, MOD_MUSIC_LEVEL4};
                 phase = target;
                 activeColors = 2 + phase;
                 phantomReseed(activeColors); /* new color flows in from the rim */
@@ -119,7 +118,13 @@ static u8 cascadeCheck(void) {
                 hudNum(18, 12, phase, 1);
                 bannerTick = 96; /* ~1.6s: input + heat paused, like the web */
                 hudRefresh();
-                audioPlayMusic(phaseMod[phase]); /* blocking, hidden in the banner pause */
+                /* theme swap: music load freezes a visible frame (fine), the
+                 * backdrop needs one blanked frame for its 32KB DMA */
+                audioPlayMusic(phaseMod[phase]);
+                setScreenOff();
+                bg2LoadPhase(phase);
+                twinkleSelect(phase - 1);
+                setScreenOn();
             }
         }
         return 0;
@@ -252,6 +257,12 @@ static void restartRun(void) {
     u8 t;
     rngSeed(entropy ^ (rngNext() << 1) ^ 0x1d2b); /* human-timed entropy */
     audioPlayMusic(MOD_MUSIC_LEVEL1);
+    if (phase > 1) { /* back to the phase-1 theme */
+        setScreenOff();
+        bg2LoadPhase(1);
+        twinkleSelect(0);
+        setScreenOn();
+    }
     boardInit(3);
     seamsInit();
     for (t = 0; t < N_TRIANGLES; t++) triDisp[t] = 0xFF;

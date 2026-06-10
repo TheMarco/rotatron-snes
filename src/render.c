@@ -7,7 +7,10 @@
 extern char board_pic, board_picend, board_pal;
 extern char cursor_pic, cursor_picend, cursor_pal;
 extern char spin_pic, pulse_pic, spark_pic, ambient_pic;
-extern char bg2_pic, bg2_picend, bg2_map, bg2_pal;
+extern char bgl1_pic, bgl1_picend, bgl1_map, bgl1_pal;
+extern char bgl2_pic, bgl2_picend, bgl2_map, bgl2_pal;
+extern char bgl3_pic, bgl3_picend, bgl3_map, bgl3_pal;
+extern char bgl4_pic, bgl4_picend, bgl4_map, bgl4_pal;
 extern char title8a_pic, title8a_picend, title8b_pic, title8b_picend;
 extern char title8_map, title8_pal;
 extern char logo8_pic, logo8_picend, logo8_map, logo8_pal;
@@ -29,6 +32,7 @@ static u16 lineBuf[6]; /* breathing outline colors, staged for vblank */
 static u8 lineDirty;
 static u16 twBuf[TWINKLE_N]; /* backdrop twinkle colors, staged for vblank */
 static u8 twDirty;
+static u8 twSet; /* which backdrop's twinkle palette set (phase - 1) */
 static u16 bg2X, bg2Y; /* backdrop drift accumulators (8.8) */
 static u8 sceneMode;   /* mode-3 boot scene active: minimal vblank path */
 static u16 sceneV;     /* pinned BG1 vscroll during scenes */
@@ -60,10 +64,9 @@ void renderGameLoad(void) {
     bgSetGfxPtr(0, VRAM_BG1_TILES);
     bgSetMapPtr(0, VRAM_BG1_MAP, SC_32x32);
 
-    /* BG2: full-screen backdrop art behind the board (sub-palette 7). */
-    dmaCopyVram((u8 *)&bg2_pic, VRAM_BG2_TILES, (u16)(&bg2_picend - &bg2_pic));
-    dmaCopyVram((u8 *)&bg2_map, VRAM_BG2_MAP, 0x800);
-    setPalette((u8 *)&bg2_pal, 112, 16 * 2);
+    /* BG2: phase-1 backdrop behind the board (sub-palette 7). */
+    bg2LoadPhase(1);
+    twinkleSelect(0);
     bgSetGfxPtr(1, VRAM_BG2_TILES);
     bgSetMapPtr(1, VRAM_BG2_MAP, SC_32x32);
 
@@ -326,7 +329,7 @@ void renderVBlank(void) {
     if (twDirty) {
         u8 i;
         for (i = 0; i < TWINKLE_N; i++)
-            dmaCopyCGram((u8 *)&twBuf[i], (u16)(112 + twSlot[i]), 2);
+            dmaCopyCGram((u8 *)&twBuf[i], (u16)(112 + twSlot[twSet][i]), 2);
         twDirty = 0;
     }
 }
@@ -587,7 +590,7 @@ void twinkleFrame(u8 frame) {
     u8 i, t;
     for (i = 0; i < TWINKLE_N; i++) {
         t = breathTab[((frame >> 1) + i * 11) & 31];
-        twBuf[i] = lerpBGR(twColor[i], 0x294A, t); /* dim toward dark grey */
+        twBuf[i] = lerpBGR(twColor[twSet][i], 0x294A, t); /* dim toward grey */
     }
     twDirty = 1;
 }
@@ -648,6 +651,22 @@ void sparksFrame(u8 frame) {
  * lifts the HUD above every layer and sprite). */
 #define HUD_ATTR ((u16)(7 << 10) | 0x2000)
 #define BAR_BASE HUD_BAR_TILE
+
+/* Per-phase backdrop swap (call with the screen force-blanked: ~32KB DMA). */
+void bg2LoadPhase(u8 phase) {
+    static char *const pics[4] = {&bgl1_pic, &bgl2_pic, &bgl3_pic, &bgl4_pic};
+    static char *const ends[4] = {&bgl1_picend, &bgl2_picend, &bgl3_picend, &bgl4_picend};
+    static char *const maps[4] = {&bgl1_map, &bgl2_map, &bgl3_map, &bgl4_map};
+    static char *const pals[4] = {&bgl1_pal, &bgl2_pal, &bgl3_pal, &bgl4_pal};
+    u8 i = phase - 1;
+    dmaCopyVram((u8 *)pics[i], VRAM_BG2_TILES, (u16)(ends[i] - pics[i]));
+    dmaCopyVram((u8 *)maps[i], VRAM_BG2_MAP, 0x800);
+    dmaCopyCGram((u8 *)pals[i], 112, 32);
+}
+
+void twinkleSelect(u8 idx) {
+    twSet = idx;
+}
 
 void hudClear(void) {
     u16 i;

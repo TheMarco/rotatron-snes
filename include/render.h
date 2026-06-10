@@ -94,6 +94,8 @@ void sceneShow(u8 which); /* mode-3: 1 = title, 2 = logo */
 void scenePinV(u16 v);    /* BG1 vscroll during scenes (logo drop) */
 void sceneBlink(u16 bgr); /* CGRAM 255 = the baked PRESS START text */
 void hudClear(void);
+void bg2LoadPhase(u8 phase); /* per-phase backdrop; screen must be blanked */
+void twinkleSelect(u8 idx);  /* twinkle palette set (phase - 1) */
 void hudBox(u8 x, u8 y, u8 w, u8 h); /* 1px-bordered panel ring */
 
 #endif
