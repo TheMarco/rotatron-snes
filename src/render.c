@@ -46,11 +46,14 @@ static u8 heatColorDirty;
 static u8 barPx = 0xFF; /* current bar fill, 0..240 */
 static u8 dotPalDirty;
 
+static void renderZeroState(void); /* defined at file end, after all statics */
+
 void renderInit(void) {
     consoleInit();
     setBrightness(0);
     WaitForVBlank();
     oamInit();
+    renderZeroState();
 }
 
 /* Load EVERYTHING the game needs into VRAM/CGRAM (call with the screen
@@ -814,4 +817,35 @@ void cursorUpdate(u8 k, u8 j, u8 frame) {
     oamSetEx(OAM_CURSOR, OBJ_SMALL, OBJ_SHOW);
     /* gentle blink: ~0.7s on, ~0.2s off */
     if ((frame & 63) > 51) oamSetVisible(OAM_CURSOR, OBJ_HIDE);
+}
+
+/* WRAM is NOT zeroed at power-on and tcc doesn't clear BSS: every runtime
+ * static boots as garbage. A garbage shakeT/shakeAmp made the board jitter
+ * wildly for seconds on the FIRST cold boot only (warm restarts inherit
+ * zeroes). Called once from renderInit. */
+static void renderZeroState(void) {
+    u8 i;
+    mapDirty = 0;
+    hudDirty = 0;
+    objPalDirty = 0;
+    glowDirty = 0;
+    lineDirty = 0;
+    twDirty = 0;
+    twSet = 0;
+    dotPalDirty = 0;
+    heatColorDirty = 0;
+    blinkDirty = 0;
+    mosVal = 0;
+    shakeT = 0;
+    shakeAmp = 0;
+    pulseN = 0;
+    spkCool = 0;
+    for (i = 0; i < SPARK_N; i++) spkOn[i] = 0;
+    ambOn = 0;
+    ambCool = 60;
+    bg2X = 0;
+    bg2Y = 0;
+    barPx = 0xFF;
+    cursorHidden = 0;
+    sceneMode = 0;
 }
