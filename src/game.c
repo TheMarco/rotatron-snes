@@ -215,16 +215,21 @@ static void cascadeFrame(void) {
             glowSet(lerpBGR(cascNeon, 0, t));
             if (++cascTick >= FADE_TICKS) {
                 u8 t2, c, extra = 0;
-                u8 present[6];
-                /* Color elimination: a color absent from every NON-affected
-                 * cell just got wiped. Checked between fade-out and refill,
-                 * exactly like resolveCompletions. */
-                for (c = 0; c < 6; c++) present[c] = 0;
+                u8 presentAll[6], presentOut[6];
+                /* Color elimination: the color must TRANSITION present ->
+                 * absent in this wave (a newly-introduced color that never
+                 * spawned must NOT count - it false-fired every clear after
+                 * a phase-up and its suppression kept the new color from
+                 * ever entering). boardColor still holds the pre-refill
+                 * colors here, so presentAll = the before-wave board. */
+                for (c = 0; c < 6; c++) presentAll[c] = presentOut[c] = 0;
                 for (t2 = 0; t2 < N_TRIANGLES; t2++) {
-                    if (!affMask[t2]) present[boardColor[triRow[t2]][triCol[t2]]] = 1;
+                    u8 col2 = boardColor[triRow[t2]][triCol[t2]];
+                    presentAll[col2] = 1;
+                    if (!affMask[t2]) presentOut[col2] = 1;
                 }
                 for (c = 0; c < activeColors; c++) {
-                    if (!present[c] && !suppress[c]) {
+                    if (presentAll[c] && !presentOut[c] && !suppress[c]) {
                         suppress[c] = 4; /* out of the refill pool for 4 spins */
                         /* 1500 * fm * 2^(p-1) -> 150 * fm10 * 2^(p-1), max 24000 */
                         bcdAdd(score, (u16)(150 * fmLocked) << (phase - 1));
