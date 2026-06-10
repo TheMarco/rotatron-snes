@@ -3,21 +3,32 @@
 #define BOARDTAB_H
 #include "core_types.h"
 
-#define BOARD_TILES_W 24
-#define BOARD_TILES_H 21
-#define N_STRUCTS 26
-#define N_BOARD_VRAM_TILES 103
+#define BOARD_TILES_W 26
+#define BOARD_TILES_H 23
+#define N_STRUCTS 30
+#define N_BOARD_VRAM_TILES 104
 #define N_TRIANGLES 54
+#define N_SPIN_FRAMES 6
+#define SPIN_TICKS 20
 
 extern const u8 cellStruct[BOARD_TILES_H][BOARD_TILES_W];   /* 0xFF = blank */
-extern const u8 cellTriA[BOARD_TILES_H][BOARD_TILES_W];
-extern const u8 cellTriB[BOARD_TILES_H][BOARD_TILES_W];     /* 0xFF = single owner */
-extern const u8 structOwners[N_STRUCTS];                    /* 1 or 2 */
+extern const u8 cellTriA[BOARD_TILES_H][BOARD_TILES_W];     /* 0xFF = no owner */
+extern const u8 cellTriB[BOARD_TILES_H][BOARD_TILES_W];     /* 0xFF = <2 owners */
+extern const u8 structOwners[N_STRUCTS];                    /* 0, 1 or 2 */
 extern const u16 structBase[N_STRUCTS];
-extern const u16 entryTable[396];            /* tile | flip bits */
+extern const u16 entryTable[400];
 extern const u8 triCol[N_TRIANGLES];
 extern const u8 triRow[N_TRIANGLES];
-extern const u8 triOfCell[7][12];                  /* 0xFF outside hex */
+extern const u8 triOfCell[7][12];
 extern const u16 triCellOfs[N_TRIANGLES + 1];
-extern const u8 triCellXY[1080];              /* tx,ty pairs */
+extern const u8 triCellXY[1080];
+
+/* Spin-time blanking variants: axisEntry = pins only; halfBase -> 12 entries
+ * (A-only x6 colors, then B-only) keeping axis pixels; 0xFFFF if not dual. */
+extern const u16 axisEntry[N_STRUCTS];
+extern const u16 halfBase[N_STRUCTS];
+extern const u16 halfTable[96];
+extern const u8 spinSched[SPIN_TICKS];
+extern const u16 fillBGR[6];
+extern const u16 lineBGR[6];
 #endif

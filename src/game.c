@@ -4,14 +4,19 @@
  * A or R = spin CW, B or L = spin CCW. */
 #include <snes.h>
 #include "core.h"
+#include "boardtab.h"
 #include "render.h"
 #include "game.h"
 
 u8 curK, curJ;
 
+static u8 animTick; /* 0xFF = no spin in flight */
+static u8 animCcw, animK, animJ;
+
 void gameInit(void) {
     curK = 6;
     curJ = 3; /* board center vertex */
+    animTick = 0xFF;
 }
 
 /* Score a candidate move: primary axis distance dominates, the off-axis
@@ -46,14 +51,33 @@ static void moveCursor(u8 dir) {
 }
 
 void gameFrame(u16 pressed) {
+    /* A spin in flight owns the frame: advance the eased schedule, then bake
+     * the carry into the board (the rotation IS the state change). */
+    if (animTick != 0xFF) {
+        spinAnimFrame(animK, animJ, animCcw, spinSched[animTick]);
+        animTick++;
+        if (animTick >= SPIN_TICKS) {
+            spinAnimEnd();
+            spinApply(animK, animJ, animCcw);
+            boardRebuildMap();
+            animTick = 0xFF;
+        }
+        return;
+    }
+
     if (pressed & KEY_UP) moveCursor(0);
     if (pressed & KEY_DOWN) moveCursor(1);
     if (pressed & KEY_LEFT) moveCursor(2);
     if (pressed & KEY_RIGHT) moveCursor(3);
 
-    if (pressed & (KEY_A | KEY_R)) {
-        if (spinApply(curK, curJ, 0)) boardRebuildMap();
-    } else if (pressed & (KEY_B | KEY_L)) {
-        if (spinApply(curK, curJ, 1)) boardRebuildMap();
+    if (pressed & (KEY_A | KEY_R | KEY_B | KEY_L)) {
+        if (vertexValid[curJ][curK]) {
+            animCcw = (pressed & (KEY_B | KEY_L)) ? 1 : 0;
+            animK = curK;
+            animJ = curJ;
+            spinAnimBegin(animK, animJ, animCcw);
+            spinAnimFrame(animK, animJ, animCcw, 0);
+            animTick = 0;
+        }
     }
 }

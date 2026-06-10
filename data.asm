@@ -8,6 +8,11 @@ board_picend:
 board_pal: .incbin "res/board.pal"
 .ends
 
+; ---- Spin animation OBJ frames (6x 64x64, sector-indexed palette) ----
+.section ".rodata_spin" superfree
+spin_pic: .incbin "res/spin.pic"
+.ends
+
 ; ---- Cursor OBJ sprite (16x16 ring, 4 tiles TL/TR/BL/BR) ----
 .section ".rodata_cursor" superfree
 cursor_pic: .incbin "res/cursor.pic"

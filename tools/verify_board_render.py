@@ -45,14 +45,18 @@ def decode_pic(data):
 
 def main():
     tris, tri_of = G.build_triangles()
-    owner = [[G.owner_at(x, y, tri_of) for x in range(G.BW)] for y in range(G.BH)]
+    verts = G.valid_vertices(tri_of)
+    W, H = G.IW, G.IH
+    owner = [[G.owner_at(x - G.MARGIN, y - G.MARGIN, tri_of) for x in range(W)]
+             for y in range(H)]
 
     def own(x, y):
-        return owner[y][x] if 0 <= x < G.BW and 0 <= y < G.BH else -1
+        return owner[y][x] if 0 <= x < W and 0 <= y < H else -1
 
     line = [[any(own(x + dx, y + dy) != owner[y][x]
                  for dy in (-1, 0, 1) for dx in (-1, 0, 1))
-             and owner[y][x] >= 0 for x in range(G.BW)] for y in range(G.BH)]
+             and owner[y][x] >= 0 for x in range(W)] for y in range(H)]
+    axis = [[G.axis_at(x, y, verts) for x in range(W)] for y in range(H)]
 
     arr = parse_c_arrays((ROOT / "src/boardtab.c").read_text())
     tiles = decode_pic((ROOT / "res/board.pic").read_bytes())
@@ -63,28 +67,35 @@ def main():
     for trial in range(5):
         tcol = [rng.randrange(6) for _ in tris]
 
-        # ground truth palette-index image
-        truth = [[0] * G.BW for _ in range(G.BH)]
-        for y in range(G.BH):
-            for x in range(G.BW):
+        # ground truth palette-index image (axis pins on top)
+        truth = [[0] * W for _ in range(H)]
+        for y in range(H):
+            for x in range(W):
+                if axis[y][x]:
+                    truth[y][x] = 14 if axis[y][x] == 2 else 13
+                    continue
                 o = owner[y][x]
                 if o >= 0:
                     truth[y][x] = (7 if line[y][x] else 1) + tcol[o]
 
         # render.c path: entry lookup -> tile pixels -> flips
-        composed = [[0] * G.BW for _ in range(G.BH)]
+        composed = [[0] * W for _ in range(H)]
         for ty in range(TH):
             for tx in range(TW):
                 sid = arr["cellStruct"][ty * TW + tx]
                 if sid == 0xFF:
                     continue
-                a = arr["cellTriA"][ty * TW + tx]
-                ca = tcol[a]
-                if arr["structOwners"][sid] == 2:
-                    b = arr["cellTriB"][ty * TW + tx]
-                    e = arr["entryTable"][arr["structBase"][sid] + ca * 6 + tcol[b]]
+                nown = arr["structOwners"][sid]
+                if nown == 0:
+                    e = arr["entryTable"][arr["structBase"][sid]]
                 else:
-                    e = arr["entryTable"][arr["structBase"][sid] + ca]
+                    a = arr["cellTriA"][ty * TW + tx]
+                    ca = tcol[a]
+                    if nown == 2:
+                        b = arr["cellTriB"][ty * TW + tx]
+                        e = arr["entryTable"][arr["structBase"][sid] + ca * 6 + tcol[b]]
+                    else:
+                        e = arr["entryTable"][arr["structBase"][sid] + ca]
                 tid, hf, vf = e & 0x3FF, e & 0x4000, e & 0x8000
                 for py in range(8):
                     for px in range(8):
@@ -92,7 +103,7 @@ def main():
                         sy = 7 - py if vf else py
                         composed[ty * 8 + py][tx * 8 + px] = tiles[tid][sy][sx]
 
-        bad = sum(1 for y in range(G.BH) for x in range(G.BW)
+        bad = sum(1 for y in range(H) for x in range(W)
                   if truth[y][x] != composed[y][x])
         status = "OK" if bad == 0 else f"FAIL ({bad} px differ)"
         print(f"trial {trial}: {status}")
@@ -100,15 +111,15 @@ def main():
 
         if trial == 0:
             from PIL import Image
-            img = Image.new("RGB", (G.BW, G.BH))
+            img = Image.new("RGB", (W, H))
             p = img.load()
             pal = [(0, 0, 0)] + [tuple(min(255, int(v * G.FILL_BOOST)) for v in G.DARK[n])
                                  for n, _ in G.NEON] + [rgb for _, rgb in G.NEON] + \
-                  [(0, 0, 0), (255, 255, 255), (96, 96, 96)]
-            for y in range(G.BH):
-                for x in range(G.BW):
+                  [G.GREY, G.WHITE, (0, 0, 0)]
+            for y in range(H):
+                for x in range(W):
                     p[x, y] = pal[composed[y][x]]
-            img.resize((G.BW * 3, G.BH * 3), Image.NEAREST).save(ROOT / "res/composed.png")
+            img.resize((W * 3, H * 3), Image.NEAREST).save(ROOT / "res/composed.png")
 
     sys.exit(1 if fails else 0)
 
