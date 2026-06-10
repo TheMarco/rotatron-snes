@@ -7,6 +7,8 @@
 #include "boardtab.h"
 #include "render.h"
 #include "game.h"
+#include "audio.h"
+#include "audio_sfx.h"
 
 u8 curK, curJ;
 
@@ -69,6 +71,8 @@ static u8 cascadeCheck(void) {
     glowSet(WHITE_BGR);
     setAffDisp(DISP_GLOW);
     pulseStart(cascN, cascHexK, cascHexJ);
+    audioSfx(SFX_HEXAGON);
+    if (cascDepth >= 2) audioSfx(SFX_EXTRABONUS); /* cascade escalation layer */
     return cascN;
 }
 
@@ -184,6 +188,7 @@ void gameFrame(u16 pressed) {
             spinAnimBegin(animK, animJ, animCcw);
             spinAnimFrame(animK, animJ, animCcw, 0);
             animTick = 0;
+            audioSfx(SFX_TURNWHEEL);
         }
     }
 }

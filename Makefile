@@ -5,9 +5,10 @@ ifeq ($(strip $(PVSNESLIB_HOME)),)
 $(error PVSNESLIB_HOME is not set. Export it or write the path into .pvsneslib_home)
 endif
 
-# snesmod soundbank. When SFX land, their bank goes FIRST (fixes MOD_ indices).
+# snesmod soundbank: the SFX bank MUST be first (its samples are the global
+# effects; order also fixes the MOD_ indices used in audio.c).
 MUSICFILES := res/music_level1.it
-AUDIOFILES := $(MUSICFILES)
+AUDIOFILES := res/sfx.it $(MUSICFILES)
 export SOUNDBANK := res/soundbank
 
 include ${PVSNESLIB_HOME}/devkitsnes/snes_rules
@@ -49,9 +50,11 @@ gfx:
 	python3 tools/build_board_gfx.py
 	python3 tools/build_backdrop.py
 
-# Rebuild music modules from music/*.mid (also writes res/*_preview.wav).
+# Rebuild music modules from music/*.mid (also writes res/*_preview.wav)
+# and the SFX bank from music/s-*.mp3.
 songs:
 	python3 tools/mid2it.py music/level1.mid level1
+	python3 tools/build_audio.py
 
 # Host-side golden tests: compile the core game logic with clang and compare
 # against vectors generated from the web game's JS modules.
