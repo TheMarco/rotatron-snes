@@ -470,10 +470,12 @@ def main():
     (ROOT / "res/pulse.pic").write_bytes(pulse)
 
     # ---- cursor sprite ----
+    # Slightly oval on purpose: 1px shorter vertically so the ring hugs the
+    # axle pin better on screen (and under the board's squashed geometry).
     cur = [[0] * 16 for _ in range(16)]
     for y in range(16):
         for x in range(16):
-            d2 = (x - 7.5) ** 2 + (y - 7.5) ** 2
+            d2 = (x - 7.5) ** 2 + ((y - 7.5) * (7.5 / 6.5)) ** 2
             if 27.0 <= d2 <= 56.0:
                 cur[y][x] = 1
             elif 18.0 <= d2 < 27.0 or 56.0 < d2 <= 68.0:
