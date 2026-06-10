@@ -43,21 +43,22 @@ static u8 score[SCORE_DIGITS];
 static u8 spinsSince, fmLocked;
 static u16 longestCasc;
 
-/* Three bordered panels under the heat bar (web HUD layout):
- *   [ PHASE ]      [ SCORE ]      [ HEXES ]
- *   1 oooooo       00012345       0000  X00   */
+/* HEAT: bar on row 0; three bordered panels 8px below (rows 2..5) with a
+ * 1-col margin each side (web HUD layout):
+ *   PHASE: digit + color dots | SCORE: 8 digits | HEXES: count + X## */
 static void hudRefresh(void) {
-    hudBox(0, 1, 10, 4);
-    hudBox(11, 1, 10, 4);
-    hudBox(22, 1, 10, 4);
-    hudText(2, 2, "PHASE");
-    hudText(24, 2, "HEXES");
-    hudText(13, 2, "SCORE");
-    hudNum(1, 3, phase, 1);
+    hudText(1, 0, "HEAT:");
+    hudBox(1, 2, 9, 4);
+    hudBox(11, 2, 10, 4);
+    hudBox(21, 2, 10, 4);
+    hudText(3, 3, "PHASE");
+    hudText(13, 3, "SCORE");
+    hudText(23, 3, "HEXES");
+    hudNum(2, 4, phase, 1);
     hudScore(score);
-    hudNum(23, 3, hexCount, 4);
-    hudText(28, 3, "X");
-    hudNum(29, 3, (u16)longestCasc, 2);
+    hudNum(22, 4, hexCount, 4);
+    hudText(27, 4, "X");
+    hudNum(28, 4, (u16)longestCasc, 2);
     hudDots(activeColors);
 }
 
@@ -227,7 +228,7 @@ static void heatFrame(void) {
     t = heatAcc >> 8;
     heatAcc &= 0xFF;
     heat = (heat > t) ? heat - t : 0;
-    hudBarSet((u8)((((heat >> 7) * 240) >> 8)));
+    hudBarSet((u8)((((heat >> 7) * 192) >> 8))); /* 24 tiles = 192 px */
     /* green when hot, through amber, to red in the danger zone */
     t = heat >> 11; /* 0..16 */
     heatColorSet(lerpBGR(0x001F, 0x03E0, (u8)t));

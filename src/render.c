@@ -593,14 +593,18 @@ void hudNum(u8 x, u8 y, u16 val, u8 digits) {
     hudDirty = 1;
 }
 
+/* Bar fills cols HUD_BAR_X..+HUD_BAR_W-1 of row 0; "HEAT:" label left. */
+#define HUD_BAR_X 7
+#define HUD_BAR_W 24
+
 void hudBarSet(u8 px) {
     u8 col, full, rem;
-    u16 *row = &hudMap[1];
+    u16 *row = &hudMap[HUD_BAR_X];
     if (px == barPx) return;
     barPx = px;
     full = px >> 3;
     rem = px & 7;
-    for (col = 0; col < 30; col++) {
+    for (col = 0; col < HUD_BAR_W; col++) {
         u8 lvl = (col < full) ? 8 : (col == full ? rem : 0);
         row[col] = (u16)(BAR_BASE + lvl) | HUD_ATTR;
     }
@@ -620,8 +624,8 @@ void hudDots(u8 n) {
     for (i = 0; i < 6; i++) {
         u16 id = (u16)(17 + i) * 4;
         if (i < n) {
-            /* dot center at (28 + 8i, 28): row 3, right of the phase digit */
-            oamSet(id, (u16)(20 + 8 * i), 19, 3, 0, 0, DOT_TILE, (u8)(2 + i));
+            /* dot center at (30 + 8i, 36): panel value row, right of digit */
+            oamSet(id, (u16)(22 + 8 * i), 27, 3, 0, 0, DOT_TILE, (u8)(2 + i));
             oamSetEx(id, OBJ_SMALL, OBJ_SHOW);
         } else {
             oamSetVisible(id, OBJ_HIDE);
@@ -631,7 +635,7 @@ void hudDots(u8 n) {
 
 void hudScore(const u8 *d) {
     u8 i;
-    u16 *p = &hudMap[3 * 32 + 12]; /* SCORE panel value row, cols 12..19 */
+    u16 *p = &hudMap[4 * 32 + 12]; /* SCORE panel value row, cols 12..19 */
     for (i = 0; i < SCORE_DIGITS; i++) {
         p[i] = (u16)(HUD_FONT_TILE + '0' - 32 + d[SCORE_DIGITS - 1 - i]) | HUD_ATTR;
     }
