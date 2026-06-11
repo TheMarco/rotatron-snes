@@ -690,33 +690,46 @@ void sparksInit(void) {
  *   bottom   OBJs -> slots 28-32, tiles 484 486 488 490 492
  * Coordinates: 9.7 fixed point biased by AMB_BIAS so every value stays u16
  * (sprite up to 80px wide -> off-left spawn at screen -80 = bx 16 > 0). */
-#define AMB_TOP_ID (23 * 4)
-#define AMB_BOT_ID (28 * 4)
-#define AMB_PAL 0
 #define AMB_BIAS 96
 
-static const u16 ambTopTile[5] = {386, 388, 390, 392, 394};
-static const u16 ambBotTile[5] = {484, 486, 488, 490, 492};
+/* The flyer redraws all 10 OBJs every frame, so it writes oamMemory (plain
+ * WRAM, DMA'd to OAM each vblank by pvsneslib) directly from fast-bank code
+ * instead of paying ~4 slow-bank lib jsl's per column (oamSet + oamSetEx +
+ * the X8 fixup). Low table, 4 bytes per sprite at id = s*4: x low 8, y,
+ * tile low 8, attr (vhoopppN = vflip<<7 | hflip<<6 | prio<<4 | pal<<1 |
+ * tile bit 8). Every flyer tile is >=256, prio 2, pal 0 -> attr 0x21/0x61.
+ * High table at oamMemory[512+s/4], 2 bits per sprite: bit (s%4)*2 = X8
+ * (set -> the low x byte is a 9-bit negative; how partial-left columns
+ * avoid wrapping to x&0xFF on the right), bit (s%4)*2+1 = size (0 = 16x16).
+ * Tables instead of (1 << ((s&3)<<1)): tcc variable shifts are lib calls. */
+static const u8 ambTopTileLow[5] = {130, 132, 134, 136, 138}; /* (386+2i)&0xFF */
+static const u8 ambBotTileLow[5] = {228, 230, 232, 234, 236}; /* (484+2i)&0xFF */
+static const u8 oamHiClr[4] = {0xFC, 0xF3, 0xCF, 0x3F}; /* ~(3 << (s&3)*2) */
+static const u8 oamHiX8[4] = {0x01, 0x04, 0x10, 0x40};  /*  1 << (s&3)*2  */
 
-static void ambHideAll(void) {
-    u8 i;
-    for (i = 0; i < 5; i++) {
-        oamSetVisible((u16)(AMB_TOP_ID + i * 4), OBJ_HIDE);
-        oamSetVisible((u16)(AMB_BOT_ID + i * 4), OBJ_HIDE);
-    }
+static void ambOamPut(u8 s, u8 x, u8 y, u8 tileLow, u8 attr, u8 x8) {
+    u16 id = (u16)s << 2;
+    u16 b = (u16)(512 + (s >> 2));
+    oamMemory[id] = x;
+    oamMemory[id + 1] = y;
+    oamMemory[id + 2] = tileLow;
+    oamMemory[id + 3] = attr;
+    oamMemory[b] = (u8)((oamMemory[b] & oamHiClr[s & 3]) | (x8 ? oamHiX8[s & 3] : 0));
 }
 
-/* oamSet only stores X's low 8 bits, so it can't place a sprite at a negative
- * (off-left) position - that's what made off-screen columns wrap to the wrong
- * edge. Set the OAM high-table X-bit directly (oamMemory[512+] = SNES OBJ high
- * table, 2 bits/sprite: bit (s%4)*2 = X8). Call AFTER oamSetEx so its size bit
- * survives. neg=1 -> sprite sits at the 9-bit negative X we wrote low byte for. */
-static void ambSetXHigh(u16 id, u8 neg) {
-    u16 s = id >> 2;                       /* sprite number */
-    u16 b = (u16)(512 + (s >> 2));         /* high-table byte */
-    u8 bit = (u8)(1 << ((s & 3) << 1));    /* this sprite's X8 bit */
-    if (neg) oamMemory[b] |= bit;
-    else     oamMemory[b] = (u8)(oamMemory[b] & (bit ^ 0xFF));
+/* Same parked-off-screen state the lib's OBJ_HIDE uses: X8=1 with x=1 puts
+ * the sprite at -255, y=240 is below even the overscan window. */
+static void ambOamHide(u8 s) {
+    u16 id = (u16)s << 2;
+    u16 b = (u16)(512 + (s >> 2));
+    oamMemory[id] = 1;
+    oamMemory[id + 1] = 240;
+    oamMemory[b] = (u8)((oamMemory[b] & oamHiClr[s & 3]) | oamHiX8[s & 3]);
+}
+
+static void ambHideAll(void) {
+    u8 s;
+    for (s = 23; s <= 32; s++) ambOamHide(s);
 }
 
 void ambientFrame(void) {
@@ -775,29 +788,24 @@ void ambientFrame(void) {
      * hide (hiding read as a flash during spins / hex clears). */
     sy = (u16)(by - AMB_BIAS);
     /* up to 5 columns x 2 rows; RTL (flip=1) reverses the art columns. Show a
-     * column whenever its 16px span touches the screen: cx in [-15..255]. For
-     * cx<0 (partial off the left edge) we write the low byte via oamSet then
-     * set the OAM X8 bit (ambSetXHigh) so it lands at the 9-bit negative X
-     * instead of wrapping to x&0xFF on the right. cx>255 columns are hidden
-     * (the SNES can't show them on the right; they'd wrap). */
+     * column whenever its 16px span touches the screen: cx in [-15..255].
+     * cx>255 columns are hidden (the SNES can't show them on the right;
+     * they'd wrap). Direct oamMemory writes - see ambOamPut. */
     {
         s16 baseX = (s16)bx - AMB_BIAS;
+        u8 attr = (u8)(ambFlip ? 0x61 : 0x21); /* prio 2, pal 0, tile bit8 */
         for (i = 0; i < 5; i++) {
             s16 cx = baseX + (s16)(i << 4);
-            u16 tid = (u16)(AMB_TOP_ID + i * 4);
-            u16 bid = (u16)(AMB_BOT_ID + i * 4);
+            u8 sTop = (u8)(23 + i);
+            u8 sBot = (u8)(28 + i);
             if (i < ambCols && cx > -16 && cx <= 255) {
                 u8 neg = (cx < 0);
                 col = ambFlip ? (u8)(ambCols - 1 - i) : i;
-                oamSet(tid, (u16)cx, sy, 2, ambFlip, 0, ambTopTile[col], AMB_PAL);
-                oamSet(bid, (u16)cx, (u16)(sy + 16), 2, ambFlip, 0, ambBotTile[col], AMB_PAL);
-                oamSetEx(tid, OBJ_SMALL, OBJ_SHOW);
-                oamSetEx(bid, OBJ_SMALL, OBJ_SHOW);
-                ambSetXHigh(tid, neg);
-                ambSetXHigh(bid, neg);
+                ambOamPut(sTop, (u8)cx, (u8)sy, ambTopTileLow[col], attr, neg);
+                ambOamPut(sBot, (u8)cx, (u8)(sy + 16), ambBotTileLow[col], attr, neg);
             } else {
-                oamSetVisible(tid, OBJ_HIDE);
-                oamSetVisible(bid, OBJ_HIDE);
+                ambOamHide(sTop);
+                ambOamHide(sBot);
             }
         }
     }

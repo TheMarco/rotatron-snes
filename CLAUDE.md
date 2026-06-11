@@ -191,9 +191,10 @@ overran the overscan window and the DROPPED TAIL rows left the previous
 flyer's bottom half under every new ship. Motion 'H' (straight) or 'D' (gentle
 downward diagonal); travels LTR/RTL (H-flip + reversed art columns). 9.7 fixed
 point biased by AMB_BIAS (96) keeps X u16; off-screen columns are hidden by
-true-signed-X clip, and partial-left columns get the OAM X8 bit re-set LAST
-(`ambSetXHigh`): oamSet does store X bit 8, but oamSetEx(OBJ_SHOW) clears it
-(unfixed, columns wrapped to x&0xFF — the old "two ships" bug). NO per-scanline
+true-signed-X clip. The 10 OBJs redraw every frame via DIRECT oamMemory
+writes (`ambOamPut/Hide`, fast-bank, no slow-lib jsl's); partial-left
+columns set the hi-table X8 bit (unset, they wrapped to x&0xFF — the old
+"two ships" bug). NO per-scanline
 suppression: one flyer + spin/pulse/cursor/sparks stays under the 34-tile cap.
 TO ADD A TYPE: drop a PNG in sprites/ + one row in AMB_SPRITES, `make gfx`.
 
