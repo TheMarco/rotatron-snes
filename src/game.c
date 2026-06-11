@@ -262,20 +262,6 @@ static void cascadeFrame(void) {
     }
 }
 
-/* Fire 4 celebration shockwaves at random hinges. */
-static void celebrate(void) {
-    u8 ks[4], js[4], i, k, j;
-    for (i = 0; i < 4; i++) {
-        do {
-            k = rngNext() & 15;
-            j = rngNext() & 7;
-        } while (k >= VTX_COLS || !vertexValid[j][k]);
-        ks[i] = k;
-        js[i] = j;
-    }
-    pulseStart(4, ks, js);
-}
-
 static void stageFrame(u16 pressed) {
     switch (stageState) {
         case STG_FLASH: /* white strobe over the frozen board */
@@ -284,13 +270,11 @@ static void stageFrame(u16 pressed) {
                 setBrightness(15);
                 stageState = STG_OUT;
                 stageTick = 0;
-                celebrate();
             }
             break;
 
         case STG_OUT: /* the board dissolves into blocks */
             mosaicSet((u8)(stageTick >> 1));
-            pulseTick((u8)(stageTick & 31));
             if (++stageTick >= 32) {
                 stageState = STG_DOWN;
                 stageTick = 0;
@@ -310,6 +294,10 @@ static void stageFrame(u16 pressed) {
                 setScreenOff();
                 bg2LoadPhase(phase);
                 twinkleSelect(phase - 1);
+                /* Drop BG1 while the stats panel sits over the new backdrop:
+                 * the dissolved board parked at mosaic 15 otherwise shows as
+                 * a big pixel blob. STG_IN restores it for the reveal. */
+                layersSet(0x16);
                 setScreenOn(); /* still brightness 0 */
                 setBrightness(0);
                 hudBox(6, 9, 20, 7);
@@ -332,19 +320,16 @@ static void stageFrame(u16 pressed) {
             if (++stageTick > 15) {
                 setBrightness(15);
                 audioSfx(SFX_EXTRABONUS);
-                celebrate();
                 stageState = STG_PANEL;
                 stageTick = 0;
             }
             break;
 
-        case STG_PANEL: /* stats hold + looping celebration shockwaves */
-            if ((stageTick & 31) == 0) celebrate();
-            pulseTick((u8)(stageTick & 31));
+        case STG_PANEL: /* stats hold over the new backdrop */
             if (++stageTick >= STG_PANEL_HOLD || (pressed & KEY_START)) {
-                pulseEnd();
                 hudClear();
                 hudRefresh();
+                layersSet(0x17); /* BG1 back on: re-forms from mosaic 15 */
                 stageState = STG_IN;
                 stageTick = 0;
             }

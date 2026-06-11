@@ -35,13 +35,12 @@
  * shows map line n + VOFS + 1 -> VOFS = -45. */
 #define BOARD_TILE_X 3
 #define BOARD_PX_X 32
-/* Board pushed 16px further down at the user's request: this needs the
- * 239-line OVERSCAN mode (SETINI bit 2, play scene only) - the bottom pin
- * halos end exactly on line 239. Real CRTs crop those lines; emulators show
- * them. Region top = 60 -> VOFS = -61. */
-#define BOARD_PX_Y 68
-#define BOARD_VOFS ((u16)(0x400 - 61))
+/* Board pushed 24px down from the original 52px position. Region top = 68,
+ * VOFS = -69. Bottom of board proper = 76+168 = 244 (5 lines past overscan). */
+#define BOARD_PX_Y 76
+#define BOARD_VOFS ((u16)(0x400 - 69))
 #define REG_SETINI (*(vuint8 *)0x2133)
+#define REG_MEMSEL (*(vuint8 *)0x420D) /* bit 0: FastROM in banks $80+ */
 #define REG_MOSAIC (*(vuint8 *)0x2106)
 /* Compositing registers bsnes/hardware randomize at power-on (snes9x zeroes
  * them, which hid the missing init): windows, sub-screen, color math. */
@@ -114,10 +113,15 @@ void renderGameLoad(void);
 void sceneShow(u8 which); /* mode-3: 1 = title, 2 = logo */
 void scenePinV(u16 v);    /* BG1 vscroll during scenes (logo drop) */
 void sceneBlink(u16 bgr); /* CGRAM 255 = the baked PRESS START text */
+void logoSpriteReset(void);           /* clear particle/sparkle pools (call at boot) */
+void logoBurst(s16 cx, s16 cy, u8 n); /* landing particle spray on each bounce */
+void logoParticlesUpdate(void);       /* advance and draw live particles (call per frame) */
+void logoSparklesUpdate(u8 spawn);    /* add `spawn` sparkles and advance all live */
 void hudClear(void);
 void bg2LoadPhase(u8 phase); /* per-phase backdrop; screen must be blanked */
 void twinkleSelect(u8 idx);  /* twinkle palette set (phase - 1) */
 void mosaicSet(u8 size);     /* BG1 mosaic 0..15, applied in vblank */
+void layersSet(u8 tm);       /* main-screen TM mask, applied in vblank */
 void hudDigits(u8 x, u8 y, const u8 *d, u8 n); /* BCD digits, MSB first */
 void hudBox(u8 x, u8 y, u8 w, u8 h); /* 1px-bordered panel ring */
 

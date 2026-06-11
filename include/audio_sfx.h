@@ -9,7 +9,8 @@
 #define SFX_COLORELIM  4
 #define SFX_LEVELUP    5
 #define SFX_GAMEOVER   6
+#define SFX_LOGOTHUD   7
 
-#define SFX_COUNT 7
+#define SFX_COUNT 8
 
 #endif

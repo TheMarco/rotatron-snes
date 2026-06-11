@@ -2,6 +2,7 @@
 #include "core.h"
 #include "boardtab.h"
 #include "bg2tab.h"
+#include "ambtab.h"
 #include "render.h"
 
 extern char board_pic, board_picend, board_pal;
@@ -16,6 +17,18 @@ extern char title8_map, title8_pal;
 extern char logo8_pic, logo8_picend, logo8_map, logo8_pal;
 extern char hudfont_pic;
 
+/* White-pixel 16×16 OBJ tile for the logo landing burst and sparkles.
+ * TL+TR (tile 392, VRAM 0x7880) blank; BL (tile 408, 0x7980) blank; BR
+ * (tile 409) has one pixel at row 0, col 0 in color index 1 (= 0x7FFF white
+ * from the cursor palette). oamSet at (px-8, py-8) places that pixel at (px,py). */
+static const u8 logo_dot_tiles[128] = {
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, /* TL */
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, /* TR */
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, /* BL */
+    /* BR: bp0 row 0 = 0x80 -> leftmost pixel = color 1 = white */
+    0x80,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+};
+
 static u16 mapBuf[32 * 32];
 static u8 mapDirty;
 
@@ -24,10 +37,19 @@ static u8 mapDirty;
  * changed-word VRAM-port queue lived here briefly; its CPU pokes corrupted
  * VRAM on accurate emulators. One DMA at vblank start fits even the
  * overscan-shortened blank: ~2KB of a ~3.7KB budget.) */
+static u8 mapRowLo, mapRowHi; /* dirty tile-row span; vblank sends only this */
 static void mapWrite(u16 idx, u16 e) {
+    u8 row;
     if (mapBuf[idx] == e) return;
     mapBuf[idx] = e;
-    mapDirty = 1;
+    row = (u8)(idx >> 5);
+    if (!mapDirty) {
+        mapRowLo = mapRowHi = row;
+        mapDirty = 1;
+    } else {
+        if (row < mapRowLo) mapRowLo = row;
+        if (row > mapRowHi) mapRowHi = row;
+    }
 }
 static u16 objPalBuf[16];
 static u8 objPalDirty;
@@ -56,10 +78,31 @@ static u16 heatColor;
 static u8 heatColorDirty;
 static u8 barPx = 0xFF; /* current bar fill, 0..240 */
 static u8 dotPalDirty;
+/* Ambient sprite palette (OBJ pal 0 indices 5-15): staged per spawn. */
+static u8 ambPalBuf[22];
+static u8 ambPalDirty;
+static u8 ambTileStep; /* spawn: tile rows of the active sprite left to DMA (4..1) */
+static u8 tmStage;     /* nonzero: REG_TM value to apply at next vblank start */
+/* The flyer's four 320-byte tile rows in VRAM (word addresses). */
+static const u16 ambRowDest[4] = {
+    VRAM_OBJ_TILES + 0x1000 + 130 * 16, /* tiles 386+: art rows 0-7   */
+    VRAM_OBJ_TILES + 0x1000 + 146 * 16, /* tiles 402+: art rows 8-15  */
+    VRAM_OBJ_TILES + 0x1000 + 228 * 16, /* tiles 484+: art rows 16-23 */
+    VRAM_OBJ_TILES + 0x1000 + 244 * 16, /* tiles 500+: art rows 24-31 */
+};
+static u8 ambOn, ambType, ambFlip, ambCols; /* ambType = index into the sprite table */
+static u16 ambX, ambY;                       /* biased 9.7 fixed point */
+static s16 ambDX, ambDY;
+static u16 ambCool;
 
 static void renderZeroState(void); /* defined at file end, after all statics */
+static void ambHideAll(void);      /* hide the ambient flyer's OAM slots 23-32 */
 
 void renderInit(void) {
+    /* FastROM: tcc -F puts our code/tables in the $80+ bank mirrors; this
+     * makes those mirrors actually run at 3.58MHz (without it they stay at
+     * SlowROM speed and -F buys nothing). Lib code stays in slow banks. */
+    REG_MEMSEL = 1;
     consoleInit();
     setBrightness(0);
     WaitForVBlank();
@@ -189,15 +232,30 @@ void renderGameLoad(void) {
     /* spark frames: rows 30/31 (tiles 480/482 + their BL/BR row) */
     dmaCopyVram((u8 *)&spark_pic, (u16)(VRAM_OBJ_TILES + 0x1000 + 224 * 16), 128);
     dmaCopyVram((u8 *)&spark_pic + 128, (u16)(VRAM_OBJ_TILES + 0x1000 + 240 * 16), 128);
-    /* ambient ship/star/dot: rows 24/25 cols 2..7 (tiles 386/388/390) */
-    dmaCopyVram((u8 *)&ambient_pic, (u16)(VRAM_OBJ_TILES + 0x1000 + 130 * 16), 192);
-    dmaCopyVram((u8 *)&ambient_pic + 192, (u16)(VRAM_OBJ_TILES + 0x1000 + 146 * 16), 192);
+    /* ambient sprite: ship & voyager share one 5-OBJ-col (80px) region; the
+     * active sprite's tiles are DMA'd in at spawn (ambientFrame/renderVBlank).
+     * Seed the region with the ship so it's valid before the first spawn.
+     * 4 tile rows of 10 tiles -> OBJ tiles 386 / 402 / 484 / 500. */
+    dmaCopyVram((u8 *)&ambient_pic,        (u16)(VRAM_OBJ_TILES + 0x1000 + 130 * 16), 320);
+    dmaCopyVram((u8 *)&ambient_pic + 320,  (u16)(VRAM_OBJ_TILES + 0x1000 + 146 * 16), 320);
+    dmaCopyVram((u8 *)&ambient_pic + 640,  (u16)(VRAM_OBJ_TILES + 0x1000 + 228 * 16), 320);
+    dmaCopyVram((u8 *)&ambient_pic + 960,  (u16)(VRAM_OBJ_TILES + 0x1000 + 244 * 16), 320);
+    setPalette((u8 *)&ambient_pic + AMB_PAL_OFF, 133, 22); /* seed: sprite 0 palette */
+    /* HUD phase dot (always resident): 16x16 OBJ at tile 398 (cols 14-15). */
+    dmaCopyVram((u8 *)&ambient_pic + AMB_DOT_OFF,      (u16)(VRAM_OBJ_TILES + 0x1000 + 142 * 16), 64);
+    dmaCopyVram((u8 *)&ambient_pic + AMB_DOT_OFF + 64, (u16)(VRAM_OBJ_TILES + 0x1000 + 158 * 16), 64);
     dotPalDirty = 1; /* OBJ palettes 2..7 slot 1 = neons; staged to vblank */
     setPalette((u8 *)&cursor_pal, 128, 16 * 2);
     REG_OBSEL = OBJ_SIZE16_L32 | (VRAM_OBJ_TILES >> 13);
+    /* Hide the flyer's slots AND every slot the logo scene used (particles +
+     * sparkles, OBJ 23..127): the title left them parked, and the game never
+     * overwrites 33+, so they would linger into play as floating debris. */
+    { u16 dh; for (dh = 23; dh < 128; dh++) oamSetVisible((u16)(dh * 4), OBJ_HIDE); }
 
     for (i = 0; i < 32 * 32; i++) mapBuf[i] = 0;
     for (i = 0; i < N_TRIANGLES; i++) triDisp[i] = 0xFF;
+    mapRowLo = 0;
+    mapRowHi = 31;
     mapDirty = 1;
 
     setMode(BG_MODE1, 0);
@@ -223,13 +281,21 @@ void sceneShow(u8 which) {
         dmaCopyVram((u8 *)&title8b_pic, 0x4800, (u16)(&title8b_picend - &title8b_pic));
         dmaCopyVram((u8 *)&title8_map, 0x0000, 0x800);
         dmaCopyCGram((u8 *)&title8_pal, 0, 512);
+        videoMode = 0x01; /* BG1 only */
+        REG_TM = 0x01;
     } else {
         dmaCopyVram((u8 *)&logo8_pic, 0x1000, (u16)(&logo8_picend - &logo8_pic));
         dmaCopyVram((u8 *)&logo8_map, 0x0000, 0x800);
         dmaCopyCGram((u8 *)&logo8_pal, 0, 512);
+        /* dot tile: tile 392 (0x7880) TL+TR, tile 408 (0x7980) BL+BR */
+        dmaCopyVram((u8 *)logo_dot_tiles,      (u16)(VRAM_OBJ_TILES + 0x1000 + 136 * 16), 64);
+        dmaCopyVram((u8 *)logo_dot_tiles + 64, (u16)(VRAM_OBJ_TILES + 0x1000 + 152 * 16), 64);
+        /* load cursor palette so particles use white (pal 0 slot 1 = 0x7FFF) */
+        setPalette((u8 *)&cursor_pal, 128, 32);
+        REG_OBSEL = OBJ_SIZE16_L32 | (VRAM_OBJ_TILES >> 13);
+        videoMode = 0x11; /* BG1 + OBJ for logo particles */
+        REG_TM = 0x11;
     }
-    videoMode = 0x01; /* BG1 only */
-    REG_TM = 0x01;
     sceneMode = 1;
     sceneV = 0x3FF;
     blinkDirty = 0;
@@ -270,6 +336,8 @@ void boardRebuildMap(void) {
         row = &mapBuf[(u16)ty * 32 + BOARD_TILE_X];
         for (tx = 0; tx < BOARD_TILES_W; tx++) row[tx] = cellEntry(tx, ty);
     }
+    mapRowLo = 0;
+    mapRowHi = 31; /* full map: rebuilds happen under blank/at init */
     mapDirty = 1;
 }
 
@@ -311,6 +379,11 @@ void renderVBlank(void) {
         }
         return;
     }
+    if (tmStage) { /* staged main-screen layer switch (stage transitions) */
+        videoMode = tmStage;
+        REG_TM = tmStage;
+        tmStage = 0;
+    }
     /* Re-assert scroll every frame: setMode() resets BG offsets, and this
      * also survives any future mode/screen transitions. Shake rides on top. */
     if (shakeT) {
@@ -320,7 +393,7 @@ void renderVBlank(void) {
         bgSetScroll(0, (u16)sx, (u16)(BOARD_VOFS + sy));
         shakeT--;
     } else {
-        bgSetScroll(0, 0, BOARD_VOFS);
+        bgSetScroll(0, 0, BOARD_VOFS); /* BOARD_PX_Y=76 */
     }
     REG_MOSAIC = (u8)((mosVal << 4) | (mosVal ? 0x01 : 0)); /* board dissolve */
     /* Seamless backdrop drifts down-left: 1px steps every 8/16 frames -
@@ -328,10 +401,15 @@ void renderVBlank(void) {
     bg2X += 0x0020; /* 7.5 px/s */
     bg2Y -= 0x0010;
     bgSetScroll(1, (u16)(bg2X >> 8) & 0xFF, (u16)(((bg2Y >> 8) - 1) & 0xFF));
-    bgSetScroll(2, 0, 0x3FF);
+    bgSetScroll(2, 0, 0x3F7);
     if (heatColorDirty) {
         dmaCopyCGram((u8 *)&heatColor, 31, 2);
         heatColorDirty = 0;
+    }
+    if (ambPalDirty) {
+        /* OBJ pal 0 indices 5-15 (CGRAM words 133-143): ship or voyager colors */
+        dmaCopyCGram((u8 *)ambPalBuf, 133, 22);
+        ambPalDirty = 0;
     }
     if (dotPalDirty) {
         u8 c;
@@ -339,10 +417,26 @@ void renderVBlank(void) {
             dmaCopyCGram((u8 *)&lineBGR[c], (u16)(128 + (2 + c) * 16 + 1), 2);
         dotPalDirty = 0;
     }
-    /* big transfers last (see above); one 2KB map per vblank */
+    /* big transfers last (see above); ONE per vblank. The 2KB map wins the
+     * slot (a delayed spin recolor is visible; a flyer entering from
+     * off-screen a few frames late is not). A flyer spawn streams its 1280
+     * tile bytes ONE 320-byte row per vblank: all four rows chained in one
+     * vblank overran the overscan window (the NMI already carries the OAM
+     * DMA + snesmod work), and the dropped TAIL rows left the previous
+     * flyer's bottom half under every new ship - the "junk under the ship"
+     * bug. ambientFrame holds the flyer off-screen until the last row lands. */
     if (mapDirty) {
-        dmaCopyVram((u8 *)mapBuf, VRAM_BG1_MAP, 0x800);
+        /* only the dirty tile-row span: a spin/glow touches ~6-10 rows
+         * (~640B) - the full 2KB goes only on rebuilds */
+        dmaCopyVram((u8 *)mapBuf + ((u16)mapRowLo << 6),
+                    (u16)(VRAM_BG1_MAP + ((u16)mapRowLo << 5)),
+                    (u16)((u16)(mapRowHi - mapRowLo + 1) << 6));
         mapDirty = 0;
+    } else if (ambTileStep) {
+        u8 row = (u8)(4 - ambTileStep);
+        u8 *s = (u8 *)&ambient_pic + (u16)ambType * AMB_TILE_BYTES + (u16)row * 320;
+        dmaCopyVram(s, ambRowDest[row], 320);
+        ambTileStep--;
     } else if (hudDirty) {
         dmaCopyVram((u8 *)hudMap, VRAM_BG3_MAP, 0x800);
         hudDirty = 0;
@@ -384,7 +478,10 @@ static const u8 breathTab[32] = {0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 4, 5, 5, 5, 5, 5,
                                  5, 5, 5, 5, 4, 4, 4, 3, 3, 2, 2, 1, 1, 0, 0, 0};
 
 void linePulse(u8 frame) {
-    u8 c, t = breathTab[(frame >> 2) & 31]; /* ~2.1s period, max 5/16 */
+    u8 c, t;
+    if (frame & 3) return; /* breathTab index moves every 4 frames: the other
+                            * 3 recompute (6 lerps) + re-DMA identical colors */
+    t = breathTab[(frame >> 2) & 31]; /* ~2.1s period, max 5/16 */
     for (c = 0; c < 6; c++) lineBuf[c] = lerpBGR(lineBGR[c], 0x7FFF, t);
     lineDirty = 1;
 }
@@ -580,66 +677,137 @@ void sparksInit(void) {
     spkCool = 30;
 }
 
-/* Ambient sky: one object at a time crossing BEHIND the board (OBJ priority
- * 2, under BG1's priority-1 tiles, over the backdrop) - a slow ship
- * (left/right) or a fast shooting star. Sprite 16. */
-#define AMB_SHIP_TILE 386
-#define AMB_STAR_TILE 388
-#define AMB_ID (16 * 4)
+/* Ambient sky: one wide sprite at a time crossing BEHIND the board (OBJ
+ * priority 2, under BG1's priority-1 tiles, over the backdrop). Two kinds:
+ * a long ship (5 OBJ-cols = 80px, horizontal LTR/RTL) and the voyager probe
+ * (3 OBJ-cols = 48px, gentle downward diagonal). They never coexist, so they
+ * SHARE one 5x2 OBJ-tile region (tiles 386/402/484/500); the active sprite's
+ * 1280 bytes are DMA'd in at spawn (ambTileDirty -> renderVBlank), and its
+ * 11-color palette swapped into OBJ pal0 indices 5-15 (CGRAM 133-143).
+ *
+ * Layout (OAM slots 23-32 = logo particles, unused during PLAY):
+ *   top row  OBJs -> slots 23-27, tiles 386 388 390 392 394
+ *   bottom   OBJs -> slots 28-32, tiles 484 486 488 490 492
+ * Coordinates: 9.7 fixed point biased by AMB_BIAS so every value stays u16
+ * (sprite up to 80px wide -> off-left spawn at screen -80 = bx 16 > 0). */
+#define AMB_TOP_ID (23 * 4)
+#define AMB_BOT_ID (28 * 4)
+#define AMB_PAL 0
+#define AMB_BIAS 96
 
-/* Pure 16-bit, all-positive coordinates: 9.7 fixed point with a +32px bias
- * (tcc-816's 32-bit helpers proved as unreliable as its signed division -
- * the s32 version made flyers pop in and out at the screen edges).
- * Biased x spans 16..288 (-16..256 on screen): 288<<7 = 36864, fits u16. */
-#define AMB_BIAS 32
-static u8 ambOn, ambStar, ambFlip;
-static u16 ambX, ambY; /* biased 9.7 */
-static s16 ambDX, ambDY;
-static u16 ambCool;
+static const u16 ambTopTile[5] = {386, 388, 390, 392, 394};
+static const u16 ambBotTile[5] = {484, 486, 488, 490, 492};
+
+static void ambHideAll(void) {
+    u8 i;
+    for (i = 0; i < 5; i++) {
+        oamSetVisible((u16)(AMB_TOP_ID + i * 4), OBJ_HIDE);
+        oamSetVisible((u16)(AMB_BOT_ID + i * 4), OBJ_HIDE);
+    }
+}
+
+/* oamSet only stores X's low 8 bits, so it can't place a sprite at a negative
+ * (off-left) position - that's what made off-screen columns wrap to the wrong
+ * edge. Set the OAM high-table X-bit directly (oamMemory[512+] = SNES OBJ high
+ * table, 2 bits/sprite: bit (s%4)*2 = X8). Call AFTER oamSetEx so its size bit
+ * survives. neg=1 -> sprite sits at the 9-bit negative X we wrote low byte for. */
+static void ambSetXHigh(u16 id, u8 neg) {
+    u16 s = id >> 2;                       /* sprite number */
+    u16 b = (u16)(512 + (s >> 2));         /* high-table byte */
+    u8 bit = (u8)(1 << ((s & 3) << 1));    /* this sprite's X8 bit */
+    if (neg) oamMemory[b] |= bit;
+    else     oamMemory[b] = (u8)(oamMemory[b] & (bit ^ 0xFF));
+}
 
 void ambientFrame(void) {
-    u16 bx, by;
+    u16 bx, by, sx, sy;
+    u8 i, col;
     if (!ambOn) {
-        if (ambCool) {
-            ambCool--;
-            return;
-        }
-        ambStar = (rngNext() & 3) == 0; /* 1 in 4 spawns is a shooting star */
-        if (ambStar) {
-            ambFlip = rngNext() & 1;
-            ambX = (u16)(AMB_BIAS + 40 + (rngNext() & 127)) << 7;
-            ambY = (u16)(AMB_BIAS - 12) << 7;
-            ambDX = ambFlip ? -0x0140 : 0x0140; /* 2.5 px/f diagonal */
-            ambDY = 0x0100;
+        if (ambCool) { ambCool--; return; }
+        /* Pick a random sprite type (rejection-sampled - no signed modulo). */
+        do { ambType = (u8)(rngNext() & AMB_PICK_MASK); } while (ambType >= AMB_SPRITE_N);
+        ambFlip = rngNext() & 1;       /* RTL when set */
+        ambCols = ambSpriteCols[ambType];
+        /* Enter fully off-screen on the chosen side (sprite up to 80px wide).
+         * Y stays in the board band (screen >=80) so flyers never ride up into
+         * the HUD panels; the board top is at screen 76. */
+        ambX = (u16)(ambFlip ? AMB_BIAS + 256 : AMB_BIAS - 80) << 7;
+        if (ambSpriteMotion[ambType]) {
+            /* 'D': slow gentle downward diagonal - bounded, never exits edges */
+            ambY = (u16)(AMB_BIAS + 84 + (rngNext() & 31)) << 7;  /* screen 84..115 */
+            ambDX = ambFlip ? -0x0040 : 0x0040; /* 0.5 px/f */
+            ambDY = 0x0010;                      /* 0.125 px/f down */
         } else {
-            ambFlip = rngNext() & 1; /* RTL when set */
-            ambX = (u16)(ambFlip ? AMB_BIAS + 256 : AMB_BIAS - 16) << 7;
-            ambY = (u16)(AMB_BIAS + 20 + (rngNext() & 127) + (rngNext() & 31)) << 7;
-            ambDX = ambFlip ? -0x0030 : 0x0030; /* ~0.4 px/f drift */
+            /* 'H': straight horizontal pass at a random board height */
+            ambY = (u16)(AMB_BIAS + 80 + (rngNext() & 95)) << 7; /* screen 80..175 */
+            ambDX = ambFlip ? -0x0030 : 0x0030; /* ~0.375 px/f */
             ambDY = 0;
+        }
+        /* Stage the tile + palette swap (applied in renderVBlank pre-display). */
+        {
+            u8 k;
+            u8 *src = (u8 *)&ambient_pic + AMB_PAL_OFF + (u16)ambType * AMB_PAL_BYTES;
+            for (k = 0; k < 22; k++) ambPalBuf[k] = src[k];
+            ambPalDirty = 1;
+            ambTileStep = 4; /* renderVBlank streams one tile row per vblank */
         }
         ambOn = 1;
         return;
     }
+    /* Hold position (still fully off-screen, columns hidden) until all four
+     * tile rows are resident - moving sooner showed the previous flyer's
+     * tiles on the leading columns. */
+    if (ambTileStep) return;
     ambX += (u16)ambDX;
     ambY += (u16)ambDY;
-    bx = ambX >> 7; /* biased pixels, 0..511 */
+    bx = ambX >> 7;
     by = ambY >> 7;
-    if (bx < AMB_BIAS - 16 || bx > AMB_BIAS + 256 || by > AMB_BIAS + 224) {
+    /* exit off either horizontal edge (u16 wrap makes a left-exit a huge bx) */
+    if (bx < AMB_BIAS - 80 || bx > AMB_BIAS + 256 || by > AMB_BIAS + 232) {
         ambOn = 0;
-        ambCool = 500 + (rngNext() & 511); /* ~8-17s of empty sky */
-        oamSetVisible(AMB_ID, OBJ_HIDE);
+        ambCool = 240 + (rngNext() & 255); /* ~4-8s of empty sky between flyers */
+        ambHideAll();
         return;
     }
-    oamSet(AMB_ID, (u16)(bx - AMB_BIAS), (u16)(by - AMB_BIAS - 1), 2, ambFlip, 0,
-           ambStar ? AMB_STAR_TILE : AMB_SHIP_TILE, 0);
-    oamSetEx(AMB_ID, OBJ_SMALL, OBJ_SHOW);
+    /* No per-scanline suppression: one flyer (<=10 tiles/line) plus the spin
+     * cluster (~8) or a cascade's spread-out pulses (~8-12 on any one line),
+     * cursor and sparks all stay under the 34-tile cap, so it never needs to
+     * hide (hiding read as a flash during spins / hex clears). */
+    sy = (u16)(by - AMB_BIAS);
+    /* up to 5 columns x 2 rows; RTL (flip=1) reverses the art columns. Show a
+     * column whenever its 16px span touches the screen: cx in [-15..255]. For
+     * cx<0 (partial off the left edge) we write the low byte via oamSet then
+     * set the OAM X8 bit (ambSetXHigh) so it lands at the 9-bit negative X
+     * instead of wrapping to x&0xFF on the right. cx>255 columns are hidden
+     * (the SNES can't show them on the right; they'd wrap). */
+    {
+        s16 baseX = (s16)bx - AMB_BIAS;
+        for (i = 0; i < 5; i++) {
+            s16 cx = baseX + (s16)(i << 4);
+            u16 tid = (u16)(AMB_TOP_ID + i * 4);
+            u16 bid = (u16)(AMB_BOT_ID + i * 4);
+            if (i < ambCols && cx > -16 && cx <= 255) {
+                u8 neg = (cx < 0);
+                col = ambFlip ? (u8)(ambCols - 1 - i) : i;
+                oamSet(tid, (u16)cx, sy, 2, ambFlip, 0, ambTopTile[col], AMB_PAL);
+                oamSet(bid, (u16)cx, (u16)(sy + 16), 2, ambFlip, 0, ambBotTile[col], AMB_PAL);
+                oamSetEx(tid, OBJ_SMALL, OBJ_SHOW);
+                oamSetEx(bid, OBJ_SMALL, OBJ_SHOW);
+                ambSetXHigh(tid, neg);
+                ambSetXHigh(bid, neg);
+            } else {
+                oamSetVisible(tid, OBJ_HIDE);
+                oamSetVisible(bid, OBJ_HIDE);
+            }
+        }
+    }
 }
 
 /* Backdrop star twinkle: the brightest backdrop palette slots breathe.
  * Staged here, DMA'd in renderVBlank. */
 void twinkleFrame(u8 frame) {
     u8 i, t;
+    if (frame & 1) return; /* indices move every 2 frames; skip the identical half */
     for (i = 0; i < TWINKLE_N; i++) {
         t = breathTab[((frame >> 1) + i * 11) & 31];
         twBuf[i] = lerpBGR(twColor[twSet][i], 0x294A, t); /* dim toward grey */
@@ -724,6 +892,15 @@ void mosaicSet(u8 size) {
     mosVal = size;
 }
 
+/* Stage a main-screen layer mask (applied at the next vblank start, so the
+ * switch never tears mid-frame). Stage transitions drop BG1 (0x16) while the
+ * stats panel sits over the new backdrop - the dissolved board parked at
+ * mosaic 15 otherwise reads as a big pixel blob - and restore 0x17 for the
+ * mosaic reveal. */
+void layersSet(u8 tm) {
+    tmStage = tm;
+}
+
 void hudDigits(u8 x, u8 y, const u8 *d, u8 n) {
     u8 i;
     u16 *p = &hudMap[(u16)y * 32 + x];
@@ -782,16 +959,18 @@ void heatColorSet(u16 bgr) {
     heatColorDirty = 1;
 }
 
-/* Phase-color dots: sprites 17..22 inside the PHASE panel value row. */
-#define DOT_TILE 390
+/* Phase-color dots: sprites 17..22 inside the PHASE panel value row.
+ * 16x16 OBJ at tile 398 (high-bank cols 14-15), resident outside the shared
+ * ambient region so the flyer's spawn-time tile DMA never disturbs it. */
+#define DOT_TILE 398
 
 void hudDots(u8 n) {
     u8 i;
     for (i = 0; i < 6; i++) {
         u16 id = (u16)(17 + i) * 4;
         if (i < n) {
-            /* dot center at (30 + 8i, 47): lowered value row, right of digit */
-            oamSet(id, (u16)(22 + 8 * i), 38, 3, 0, 0, DOT_TILE, (u8)(2 + i));
+            /* dot center tracks the 8px HUD scroll shift */
+            oamSet(id, (u16)(22 + 8 * i), 46, 3, 0, 0, DOT_TILE, (u8)(2 + i));
             oamSetEx(id, OBJ_SMALL, OBJ_SHOW);
         } else {
             oamSetVisible(id, OBJ_HIDE);
@@ -863,6 +1042,112 @@ void cursorUpdate(u8 k, u8 j, u8 frame) {
     if ((frame & 63) > 51) oamSetVisible(OAM_CURSOR, OBJ_HIDE);
 }
 
+/* Logo landing burst + settled sparkles (ported from deadfall-snes).
+ * Particles: 24 pool, sprites 23..46 (OAM ids 92..184).
+ * Sparkles: 28 pool, sprites 47..74 (OAM ids 188..296).
+ * Both draw with logo_dot_tiles (tile 392, cursor palette 0). */
+#define LOGO_PART_BASE  92   /* OAM byte offset for first particle sprite */
+#define LOGO_SPARK_BASE 188  /* OAM byte offset for first sparkle sprite */
+#define LOGO_DOT_TILE   392  /* 16x16: TL/TR at 392, BL/BR at 408 */
+#define MAX_LPART  24
+#define MAX_LSPARK 28
+
+static u8 lp_rng;
+static u8 lp_rand(void) { lp_rng = (u8)(lp_rng * 37 + 17); return lp_rng; }
+
+/* 32 points on the logo perimeter ellipse, centre (128,112), ~76x30. */
+static const s8 spark_ring[64] = {
+     76,  0,  75,  6,  70, 11,  63, 17,  54, 21,  42, 25,  29, 28,  15, 29,
+      0, 30, -15, 29, -29, 28, -42, 25, -54, 21, -63, 17, -70, 11, -75,  6,
+    -76,  0, -75, -6, -70,-11, -63,-17, -54,-21, -42,-25, -29,-28, -15,-29,
+      0,-30,  15,-29,  29,-28,  42,-25,  54,-21,  63,-17,  70,-11,  75, -6
+};
+
+static struct { s16 x, y, vx, vy; u8 life; }          lpart[MAX_LPART];
+static struct { s16 x, y, vx, vy; u8 life, maxlife; } lspark[MAX_LSPARK];
+
+void logoSpriteReset(void) {
+    u8 i;
+    lp_rng = 0x9D;
+    for (i = 0; i < MAX_LPART; i++) {
+        lpart[i].life = 0;
+        oamSetVisible((u16)(LOGO_PART_BASE + i * 4), OBJ_HIDE);
+    }
+    for (i = 0; i < MAX_LSPARK; i++) {
+        lspark[i].maxlife = 0;
+        oamSetVisible((u16)(LOGO_SPARK_BASE + i * 4), OBJ_HIDE);
+    }
+}
+
+void logoBurst(s16 cx, s16 cy, u8 n) {
+    u8 i, k;
+    for (k = 0; k < n; k++) {
+        for (i = 0; i < MAX_LPART; i++) if (!lpart[i].life) break;
+        if (i >= MAX_LPART) return;
+        lpart[i].x  = (s16)((cx + (s16)(lp_rand() % 130) - 65) << 8);
+        lpart[i].y  = (s16)(cy << 8);
+        lpart[i].vx = (s16)((s16)(lp_rand() % 160) - 80);
+        lpart[i].vy = (s16)(-(s16)((lp_rand() % 110) + 40));
+        lpart[i].life = (u8)(22 + (lp_rand() % 18));
+    }
+}
+
+void logoParticlesUpdate(void) {
+    u8 i;
+    for (i = 0; i < MAX_LPART; i++) {
+        u16 slot = (u16)(LOGO_PART_BASE + i * 4);
+        if (lpart[i].life) {
+            lpart[i].vy = (s16)(lpart[i].vy + 13);
+            lpart[i].x  = (s16)(lpart[i].x + lpart[i].vx);
+            lpart[i].y  = (s16)(lpart[i].y + lpart[i].vy);
+            lpart[i].life--;
+            if (lpart[i].life > 6 || (lpart[i].life & 1)) {
+                oamSet(slot, (u16)((lpart[i].x >> 8) - 8), (u16)((lpart[i].y >> 8) - 8),
+                       2, 0, 0, (u16)LOGO_DOT_TILE, 0);
+                oamSetEx(slot, OBJ_SMALL, OBJ_SHOW);
+            } else oamSetVisible(slot, OBJ_HIDE);
+        } else oamSetVisible(slot, OBJ_HIDE);
+    }
+}
+
+void logoSparklesUpdate(u8 spawn) {
+    u8 i, s;
+    for (s = 0; s < spawn; s++) {
+        for (i = 0; i < MAX_LSPARK; i++) if (!lspark[i].maxlife) break;
+        if (i >= MAX_LSPARK) break;
+        {
+            s16 sx, sy;
+            if ((lp_rand() % 5) < 2) {
+                sx = (s16)(128 + (s16)(lp_rand() % 120) - 60);
+                sy = (s16)(112 + (s16)(lp_rand() % 36) - 18);
+            } else {
+                u8 a = (u8)((lp_rand() & 31) * 2);
+                sx = (s16)(128 + (s16)(s8)spark_ring[a]     + (s16)(lp_rand() % 9) - 4);
+                sy = (s16)(112 + (s16)(s8)spark_ring[a + 1] + (s16)(lp_rand() % 9) - 4);
+            }
+            lspark[i].x = (s16)(sx << 8); lspark[i].y = (s16)(sy << 8);
+            lspark[i].vx = (s16)((s16)(lp_rand() % 48) - 24);
+            lspark[i].vy = (s16)((s16)(lp_rand() % 48) - 24 - 16);
+            lspark[i].life = 0;
+            lspark[i].maxlife = (u8)(8 + (lp_rand() % 14));
+        }
+    }
+    for (i = 0; i < MAX_LSPARK; i++) {
+        u16 slot = (u16)(LOGO_SPARK_BASE + i * 4);
+        u16 ml = lspark[i].maxlife, lf;
+        if (!ml) { oamSetVisible(slot, OBJ_HIDE); continue; }
+        lspark[i].x = (s16)(lspark[i].x + lspark[i].vx);
+        lspark[i].y = (s16)(lspark[i].y + lspark[i].vy);
+        lf = ++lspark[i].life;
+        if (lf >= ml) { lspark[i].maxlife = 0; oamSetVisible(slot, OBJ_HIDE); continue; }
+        if ((u16)(lf * 20) >= (u16)(ml * 3) && (u16)(lf * 20) <= (u16)(ml * 13)) {
+            oamSet(slot, (u16)((lspark[i].x >> 8) - 8), (u16)((lspark[i].y >> 8) - 8),
+                   2, 0, 0, (u16)LOGO_DOT_TILE, 0);
+            oamSetEx(slot, OBJ_SMALL, OBJ_SHOW);
+        } else oamSetVisible(slot, OBJ_HIDE);
+    }
+}
+
 /* WRAM is NOT zeroed at power-on and tcc doesn't clear BSS: every runtime
  * static boots as garbage. A garbage shakeT/shakeAmp made the board jitter
  * wildly for seconds on the FIRST cold boot only (warm restarts inherit
@@ -870,6 +1155,8 @@ void cursorUpdate(u8 k, u8 j, u8 frame) {
 static void renderZeroState(void) {
     u8 i;
     mapDirty = 0;
+    mapRowLo = 0;
+    mapRowHi = 31;
     hudDirty = 0;
     objPalDirty = 0;
     glowDirty = 0;
@@ -886,6 +1173,10 @@ static void renderZeroState(void) {
     spkCool = 0;
     for (i = 0; i < SPARK_N; i++) spkOn[i] = 0;
     ambOn = 0;
+    ambType = 0;
+    ambPalDirty = 0;
+    ambTileStep = 0;
+    tmStage = 0;
     ambCool = 60;
     bg2X = 0;
     bg2Y = 0;

@@ -42,6 +42,7 @@ int main(void) {
 
     renderInit(); /* console + OAM boot; screen force-blanked */
     audioInit();
+    logoSpriteReset(); /* zero particle/sparkle pools (WRAM not cleared at boot) */
 
     sceneShow(2); /* studio logo, parked above the screen */
     scenePinV((u16)(LOGO_TARGET - LOGO_START - 1));
@@ -60,12 +61,14 @@ int main(void) {
 
         switch (scene) {
             case SC_LOGO:
+                logoParticlesUpdate();
                 if (logoState == 0) { /* falling under gravity */
                     logoV += LOGO_GRAV;
                     logoY += logoV;
                     if (logoY >= ((s16)LOGO_TARGET << 8)) {
                         logoY = (s16)LOGO_TARGET << 8;
-                        audioSfx(SFX_TURNWHEEL); /* impact thud */
+                        audioSfx(SFX_LOGOTHUD); /* impact thud */
+                        logoBurst(128, (s16)(LOGO_TARGET + 40), 14);
                         if (logoBounce < LOGO_MAXBOUNCE) {
                             u16 m = (u16)logoV;
                             logoV = -(s16)(((m >> 8) * LOGO_DAMP) + (((m & 0xFF) * LOGO_DAMP) >> 8));
@@ -78,11 +81,13 @@ int main(void) {
                     }
                     scenePinV((u16)((s16)LOGO_TARGET - (logoY >> 8) - 1));
                 } else if (logoState == 1) { /* settled hold */
+                    logoSparklesUpdate(2);
                     if (++logoTimer >= LOGO_HOLD) {
                         logoState = 2;
                         logoTimer = LOGO_FADE;
                     }
                 } else { /* fade to the title */
+                    logoSparklesUpdate(0);
                     if (logoTimer) {
                         logoTimer--;
                         setBrightness((u8)(15 * logoTimer / LOGO_FADE));

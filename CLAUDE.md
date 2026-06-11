@@ -16,8 +16,13 @@ diverge, update this file to match the code.
 
 - **PVSnesLib** (`~/pvsneslib/pvsneslib`, path via `.pvsneslib_home`):
   816-tcc C compiler + WLA-DX assembler/linker + smconv (snesmod audio)
-- **LoROM, 32 banks (1 MB)**, FastROM bit patched post-link
-  (`tools/set_fastrom.py` — this WLA-DX ignores the header directive)
+- **LoROM, 32 banks (1 MB), real FastROM**: `FASTROM := 1` makes tcc emit
+  `-F` (our code/tables get $80+ mirror banks) and `renderInit` sets MEMSEL
+  ($420D) — all project C runs at 3.58MHz. The link KEEPS the SlowROM libs
+  (this install's LoROM_FastROM objects fail to link: duplicate section
+  labels), so pvsneslib calls stay at 2.68MHz — works because $8X mirrors
+  $0X. Header speed bit still patched post-link (`tools/set_fastrom.py` —
+  this WLA-DX ignores the header directive)
 - **Python 3 + PIL/numpy** asset pipeline (no gfx4snes)
 - Patterns inherited from `../deadfall-snes` (Makefile shape, macOS `sed`
   shim in `tools/bin/`, NMI upload hook, soundbank layout)
@@ -170,9 +175,27 @@ of BG1 sub-pal 1).
 ### OBJ layout (OBSEL: base 0x6000, 16/32 sizes)
 
 Tiles 0-383 spin frames (6 frames × 64×64, 2 frames per 8-row band),
-384 cursor, 386/388/390 ship/star/dot, 416-479 pulse rings, 480/482 sparks.
-Sprites: 0 cursor, 1-4 spin cluster (32×32 ×4), 5-12 pulse waves A+echo,
-13-15 seam sparks, 16 ambient flyer, 17-22 HUD dots.
+384 cursor, 386-395/402-411 + 484-493/500-509 the shared ambient-flyer region
+(5 OBJ-cols × 2 rows = 40 tiles), 398 HUD dot, 416-479 pulse rings, 480/482
+sparks. Sprites: 0 cursor, 1-4 spin cluster (32×32 ×4), 5-12 pulse waves
+A+echo, 13-15 seam sparks, 17-22 HUD dots, 23-32 ambient flyer (10 small OBJs).
+
+**Ambient flyers** (`ambientFrame`): decorative sky sprites crossing BEHIND
+the board (OBJ priority 2), ONE at a time. A generated table (`AMB_SPRITES` in
+build_board_gfx.py → `include/ambtab.h`) holds N ≤80×32 PNG types (ship,
+voyager, …); each is emitted as a 1280-byte 5-col block + 11-color palette.
+At spawn a random type's tiles stream into the shared region ONE 320-byte
+tile row per vblank (`ambTileStep`, map DMA wins the slot); the flyer holds
+off-screen until the last row lands. All four rows chained in one vblank
+overran the overscan window and the DROPPED TAIL rows left the previous
+flyer's bottom half under every new ship. Motion 'H' (straight) or 'D' (gentle
+downward diagonal); travels LTR/RTL (H-flip + reversed art columns). 9.7 fixed
+point biased by AMB_BIAS (96) keeps X u16; off-screen columns are hidden by
+true-signed-X clip, and partial-left columns get the OAM X8 bit re-set LAST
+(`ambSetXHigh`): oamSet does store X bit 8, but oamSetEx(OBJ_SHOW) clears it
+(unfixed, columns wrapped to x&0xFF — the old "two ships" bug). NO per-scanline
+suppression: one flyer + spin/pulse/cursor/sparks stays under the 34-tile cap.
+TO ADD A TYPE: drop a PNG in sprites/ + one row in AMB_SPRITES, `make gfx`.
 
 **Spin animation:** pre-rendered sector-indexed frames (0..50°, true-space
 rotation re-squashed); `spinAnimBegin` writes the ring's actual colors into
@@ -199,8 +222,11 @@ color (31), title blink (255 in mode 3).
   (= random tile corruption, bsnes showed it, snes9x doesn't).
 - **DMA only — never CPU VRAM-port pokes** (a changed-word poke queue
   corrupted VRAM twice before being removed).
-- **One 2KB map per vblank** (board first, HUD next frame). With overscan
-  the budget is ~3.7KB total including pvsneslib's OAM DMA.
+- **One map transfer per vblank** (board first, HUD next frame). The board
+  map sends only its dirty tile-ROW span (`mapRowLo/Hi`, ~640B for a spin;
+  full 2KB only on rebuilds). With overscan the budget is ~3.7KB total
+  including pvsneslib's OAM DMA — and the flyer's spawn tiles stream one
+  320B row per vblank because even 1280B chained late in the NMI overran it.
 - Game code only STAGES (mapWrite/dirty flags/palette buffers); boot and
   scene transitions may call `renderVBlank()` directly under force-blank
   (unmetered bandwidth) and must `WaitForVBlank()` before `setScreenOn()`.
@@ -228,9 +254,12 @@ Play state machines (game.c):
   (depth cap 50); freshness locks at the first wave, resets after clears.
 - **Stage complete** (STG_FLASH/OUT/DOWN/UP/PANEL/IN): strobe+shake → BG1
   mosaic dissolve → fade to black → ALL heavy swaps at black (music module
-  load ~0.5s blocking, backdrop DMA, stats panel) → fade up → celebration
-  shockwaves → mosaic reveal. Phase mechanics (+1 color, phantom reseed,
-  +0.4 heat, +22% drain) apply mid-dissolve. START skips the panel hold.
+  load ~0.5s blocking, backdrop DMA, stats panel; BG1 dropped from TM via
+  `layersSet(0x16)` — parked at mosaic 15 it read as a big pixel blob) →
+  fade up → stats hold → BG1 back (`layersSet(0x17)`) + mosaic reveal.
+  Phase mechanics (+1 color, phantom reseed, +0.4 heat, +22% drain) apply
+  mid-dissolve. START skips the panel hold. No shockwaves during the
+  transition (user-removed).
 - **Heat**: Q15 (32768 = full), drain accumulated in 1/256ths per frame,
   gain `0.18*n²` per wave (saturating table), pauses during stage
   transitions; empty (checked only while idle) → GAME OVER + gameover

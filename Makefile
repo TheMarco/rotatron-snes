@@ -12,7 +12,19 @@ MUSICFILES := res/music_level1.it res/music_title.it res/music_gameover.it \
 AUDIOFILES := res/sfx.it $(MUSICFILES)
 export SOUNDBANK := res/soundbank
 
+# Real FastROM, with a twist: FASTROM=1 makes tcc emit -F (our C code's
+# labels land in the $80+ bank mirrors -> 3.58MHz once renderInit sets
+# MEMSEL $420D), but this install's LoROM_FastROM lib objects are broken
+# (duplicate section labels at link), so the link keeps the good SlowROM
+# libs. Lib code (oamSet, dma helpers) stays at 2.68MHz; all of OUR game/
+# render/core code and tables run fast. set_fastrom.py still patches the
+# header mode byte post-link.
+FASTROM := 1
+
 include ${PVSNESLIB_HOME}/devkitsnes/snes_rules
+
+LIBDIRSOBJS := $(PVSNESLIB_HOME)/pvsneslib/lib/LoROM_SlowROM
+LIBDIRSOBJSW := $(LIBDIRSOBJS)
 
 # smconv: soundbank mode, verbose, modules in ROM bank 5+, check sizes
 SMCONVFLAGS := -s -o $(SOUNDBANK) -V -b 5 -f
@@ -31,6 +43,9 @@ CFLAGS += -I$(CURDIR)/include
 
 # .incbin deps aren't auto-tracked: reassemble ROM data whenever converted assets change.
 data.obj: data.asm hdr.asm $(wildcard res/*.pic) $(wildcard res/*.pal) $(wildcard res/*.map)
+
+# render.c bakes in the generated ambient sprite table; recompile when it changes.
+src/render.obj: include/ambtab.h
 
 # Build with the project-local portable `sed` shim on PATH (snes_rules uses GNU
 # `sed -i`, which macOS BSD sed rejects).
@@ -55,12 +70,12 @@ gfx:
 # Rebuild music modules from music/*.mid (also writes res/*_preview.wav)
 # and the SFX bank from music/s-*.mp3.
 songs:
-	python3 tools/mid2it.py music/level1.mid level1
-	python3 tools/mid2it.py music/level2.mid level2
-	python3 tools/mid2it.py music/level3.mid level3
-	python3 tools/mid2it.py music/level4.mid level4
-	python3 tools/mid2it.py music/title.mid title
-	python3 tools/mid2it.py music/gameover.mid gameover
+	python3 tools/mid2it.py music/level1.mid level1 144
+	python3 tools/mid2it.py music/level2.mid level2 130
+	python3 tools/mid2it.py music/level3.mid level3 125
+	python3 tools/mid2it.py music/level4.mid level4 113
+	python3 tools/mid2it.py music/title.mid title 145
+	python3 tools/mid2it.py music/gameover.mid gameover 115
 	python3 tools/build_audio.py
 
 # Host-side golden tests: compile the core game logic with clang and compare

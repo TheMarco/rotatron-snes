@@ -30,7 +30,11 @@ res/cursor.pal, src/boardtab.c, include/boardtab.h, res/preview.png.
 
 import math
 import random
+from collections import deque
 from pathlib import Path
+
+import numpy as np
+import PIL.Image
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -627,29 +631,182 @@ def main():
                     lambda x, y: img[trow * 8 + y][tcol * 8 + x])
     (ROOT / "res/spark.pic").write_bytes(spark)
 
-    # ---- ambient sky sprites: ship + shooting star (16x16 each) ----
-    ship = [[0] * 16 for _ in range(16)]
-    hull = [(3, 13, 8)]
-    for x in range(3, 14):
-        ship[8][x] = 3
-    for x in range(5, 12):
-        ship[7][x] = 3
-        ship[9][x] = 3
-    for x in range(7, 10):
-        ship[6][x] = 3
-        ship[10][x] = 3
-    ship[7][10] = ship[7][11] = 1     # canopy
-    ship[8][13] = ship[8][14] = 2     # nose tip
-    ship[8][1] = ship[8][2] = 4       # engine glow
-    ship[7][2] = ship[9][2] = 4
+    # ---- ambient sky sprites (one on screen at a time, picked at random) ----
+    # Only one flyer is ever visible, so every type SHARES one 5-OBJ-column
+    # (80px) x 2-OBJ-row VRAM region; render.c DMAs the chosen type's tiles in
+    # at spawn. Each type is emitted as 4 contiguous "tile rows" of 10 tiles
+    # (320 bytes) = 1280 bytes, landing at OBJ tiles 386 / 402 / 484 / 500.
+    #
+    # TO ADD A NEW SPRITE: drop an <=80x32 PNG (white = transparent) in
+    # sprites/ and add a row below. crop=(x0,x1) trims source columns (None =
+    # whole image), cols = how many 16px OBJ columns to display (ceil(w/16)),
+    # motion = 'H' straight horizontal or 'D' gentle downward diagonal.
+    #   ambient.pic layout: N*1280 tile bytes, then N*22 palette bytes
+    #   (11 BGR555 colors -> OBJ pal0 idx 5-15), then 128 bytes dot (4 tiles).
+    AMB_SPRITES = [
+        # name,           png,                 crop,     cols, motion
+        ('ship',          'ship.png',          (6, 72),  5,   'H'),
+        ('voyager',       'voyager.png',       None,     3,   'D'),
+        ('apollo',        'apollo.png',        None,     4,   'H'),
+        ('bsg',           'bsg.png',           None,     5,   'H'),
+        ('eh',            'eh.png',            None,     5,   'H'),
+        ('enterprise',    'enterprise.png',    None,     5,   'H'),
+        ('firefly',       'firefly.png',       None,     5,   'H'),
+        ('stardestroyer', 'stardestroyer.png', None,     5,   'H'),
+        ('starship',      'starship.png',      None,     5,   'H'),
+    ]
 
-    star = [[0] * 16 for _ in range(16)]
-    for i in range(2, 12):
-        star[i][i] = 2                # tail
-    for dy in (0, 1):
-        for dx in (0, 1):
-            star[12 + dy][12 + dx] = 1  # bright head
-    star[11][12] = star[12][11] = star[13][14] = star[14][13] = 2
+    def quantize_png(arr, n=11):
+        """Reduce to <=n colors. White (255,255,255) -> index 0; non-white
+        pixels get indices 5..5+k-1 (k<=n). <=n unique colors are used exactly
+        (no clustering); more than n are k-means clustered. Palette is padded
+        to n entries (the tiles never reference the padding)."""
+        arr, trans = arr                        # (HxWx3 uint8, HxW bool)
+        h, w = arr.shape[:2]
+        pix = arr.reshape(-1, 3).astype(np.float32)
+        tflat = trans.ravel()
+        nw = pix[~tflat]
+        uniq = np.unique(nw.astype(np.uint8), axis=0).astype(np.float32)
+        if len(uniq) <= n:
+            centers = uniq                      # exact: every color kept
+        else:
+            rng = np.random.default_rng(42)
+            centers = uniq[rng.choice(len(uniq), size=n, replace=False)]
+            for _ in range(80):
+                d = np.sum((nw[:, None] - centers[None]) ** 2, axis=2)
+                assign = np.argmin(d, axis=1)
+                nc = np.array([nw[assign == k].mean(axis=0) if (assign == k).any()
+                               else centers[k] for k in range(len(centers))])
+                if np.allclose(centers, nc, atol=0.5):
+                    break
+                centers = nc
+        # map all pixels to the nearest center
+        d_all = np.sum((pix[:, None] - centers[None]) ** 2, axis=2)
+        out = np.argmin(d_all, axis=1).astype(np.uint8) + 5  # indices 5..
+        out[tflat] = 0                          # transparent -> index 0
+        pal = [tuple(int(round(c)) for c in center) for center in centers]
+        while len(pal) < n:                     # pad to n (unused entries)
+            pal.append((0, 0, 0))
+        return out.reshape(h, w), pal
+
+    def transparent_mask(img):
+        """HxW bool mask of transparent pixels. Uses the alpha channel if the
+        PNG has one; otherwise flood-fills the white background from the border
+        so white INSIDE the sprite is kept (these PNGs are flattened RGB)."""
+        if img.mode in ('RGBA', 'LA', 'P'):
+            alpha = np.array(img.convert('RGBA'))[:, :, 3]
+            if (alpha < 255).any():
+                return alpha < 128
+        a = np.array(img.convert('RGB'))
+        h, w = a.shape[:2]
+        whiteish = np.all(a >= 250, axis=2)
+        bg = np.zeros((h, w), bool)
+        from collections import deque
+        dq = deque()
+        for x in range(w):
+            for y in (0, h - 1):
+                if whiteish[y, x] and not bg[y, x]:
+                    bg[y, x] = True; dq.append((y, x))
+        for y in range(h):
+            for x in (0, w - 1):
+                if whiteish[y, x] and not bg[y, x]:
+                    bg[y, x] = True; dq.append((y, x))
+        while dq:
+            y, x = dq.popleft()
+            for dy, dx in ((0, 1), (0, -1), (1, 0), (-1, 0)):
+                ny, nx = y + dy, x + dx
+                if 0 <= ny < h and 0 <= nx < w and whiteish[ny, nx] and not bg[ny, nx]:
+                    bg[ny, nx] = True; dq.append((ny, nx))
+        return bg
+
+    def sprite_5col_tiles(idx2d):
+        """Encode an 80x32 index map as 4 tile rows x 10 tiles = 1280 bytes."""
+        out = bytearray()
+        for ty in range(4):            # tile rows: y = 0,8,16,24
+            for tx in range(10):       # 10 tiles across (80px)
+                out += encode_tile_4bpp(
+                    lambda x, y, tx=tx, ty=ty: int(idx2d[ty * 8 + y][tx * 8 + x]))
+        return out
+
+    def place_80(content, cmask):
+        """Top-left an HxW (<=80) RGB sprite + its transparency mask into an
+        80x32 canvas. Returns (rgb, trans); the padding is transparent."""
+        canvas = np.zeros((32, 80, 3), dtype=np.uint8)
+        trans = np.ones((32, 80), dtype=bool)   # padding = transparent
+        h, w = min(32, content.shape[0]), min(80, content.shape[1])
+        canvas[:h, :w, :] = content[:h, :w, :]
+        trans[:h, :w] = cmask[:h, :w]
+        return canvas, trans
+
+    def pal_bgr555(pal):
+        out = bytearray()
+        for r, g, b in pal:
+            w = (b >> 3) << 10 | (g >> 3) << 5 | (r >> 3)
+            out += bytes([w & 0xFF, w >> 8])
+        return out
+
+    def lint_sprite(name, img, crop):
+        """Warn about anything that converts badly: oversize, soft alpha, >11
+        colors, holes inside the hull, or floating specks. Faithful conversion
+        of bad art still looks bad - catch it here."""
+        W, H = img.size
+        a = np.array(img.convert('RGBA'))
+        if crop is not None:
+            a = a[:, crop[0]:crop[1], :]
+        al, rgb = a[:, :, 3], a[:, :, :3]
+        h, w = al.shape
+        warn = []
+        if img.mode not in ('RGBA', 'LA', 'P'):
+            warn.append("no alpha channel (RGB) - transparency guessed by flood-fill")
+        if W > 80 or H > 32:
+            warn.append(f"{W}x{H} exceeds 80x32 (cropped/clipped to fit)")
+        semi = int(((al > 0) & (al < 255)).sum())
+        if semi:
+            warn.append(f"{semi} semi-transparent px - SNES alpha is on/off, "
+                        "these snap to opaque/clear at 50% (soft edges harden or vanish)")
+        op = al >= 128
+        ncol = len(np.unique(rgb[op].reshape(-1, 3), axis=0))
+        if ncol > 11:
+            warn.append(f"{ncol} distinct colors (>11 -> lossy k-means; use <=11 for exact)")
+        # transparent pixels fully enclosed by opaque = holes in the hull
+        trans = ~op
+        seen = np.zeros((h, w), bool)
+        dq = deque()
+        for x in range(w):
+            for y in (0, h - 1):
+                if trans[y, x] and not seen[y, x]:
+                    seen[y, x] = True; dq.append((y, x))
+        for y in range(h):
+            for x in (0, w - 1):
+                if trans[y, x] and not seen[y, x]:
+                    seen[y, x] = True; dq.append((y, x))
+        while dq:
+            y, x = dq.popleft()
+            for dy, dx in ((0, 1), (0, -1), (1, 0), (-1, 0)):
+                ny, nx = y + dy, x + dx
+                if 0 <= ny < h and 0 <= nx < w and trans[ny, nx] and not seen[ny, nx]:
+                    seen[ny, nx] = True; dq.append((ny, nx))
+        hole = trans & ~seen
+        if hole.any():
+            hy, hx = np.where(hole)
+            warn.append(f"{int(hole.sum())} transparent HOLE(s) inside the hull "
+                        f"at {list(zip(hy.tolist(), hx.tolist()))[:8]}")
+        for msg in warn:
+            print(f"  [sprite lint] {name}: WARNING - {msg}")
+
+    amb_tiles, amb_pals = bytearray(), bytearray()
+    for name, png, crop, cols, motion in AMB_SPRITES:
+        img = PIL.Image.open(ROOT / 'sprites' / png)
+        lint_sprite(name, img, crop)
+        tmask = transparent_mask(img)         # alpha if present, else flood-fill
+        rgb = np.array(img.convert('RGB'))
+        if crop is not None:
+            rgb = rgb[:, crop[0]:crop[1], :]
+            tmask = tmask[:, crop[0]:crop[1]]
+        idx, pal = quantize_png(place_80(rgb, tmask))
+        amb_tiles += sprite_5col_tiles(idx)   # 1280 bytes
+        amb_pals += pal_bgr555(pal)           # 22 bytes
+        assert 1 <= cols <= 5, f"{name}: cols {cols} out of 1..5"
 
     # HUD phase-color dot: small hexagon, palette index 1 (each dot sprite
     # selects one of OBJ palettes 2..7 whose slot 1 holds a neon color).
@@ -659,22 +816,46 @@ def main():
             dx, dy = abs(x - 7.5), abs(y - 7.5)
             if dx <= 4 and dy <= 4 and dx + dy <= 6:
                 dot[y][x] = 1
-
-    amb = bytearray()
+    dot_bytes = bytearray()             # TL,TR (top row) then BL,BR (bottom row)
     for trow in (0, 1):
-        for img in (ship, star, dot):
-            for tcol in (0, 1):
-                amb += encode_tile_4bpp(
-                    lambda x, y, im=img: im[trow * 8 + y][tcol * 8 + x])
+        for tcol in (0, 1):
+            dot_bytes += encode_tile_4bpp(
+                lambda x, y, trow=trow, tcol=tcol: dot[trow * 8 + y][tcol * 8 + x])
+
+    amb = amb_tiles + amb_pals + dot_bytes
     (ROOT / "res/ambient.pic").write_bytes(amb)
 
+    # Generated companion header: sprite count, per-type cols/motion, offsets.
+    n = len(AMB_SPRITES)
+    mask = 1
+    while mask < n - 1:
+        mask = mask * 2 + 1
+    cols_arr = ", ".join(str(s[3]) for s in AMB_SPRITES)
+    mot_arr = ", ".join('1' if s[4] == 'D' else '0' for s in AMB_SPRITES)
+    (ROOT / "include/ambtab.h").write_text(f"""\
+#ifndef AMBTAB_H
+#define AMBTAB_H
+/* GENERATED by tools/build_board_gfx.py - do not edit. Ambient flyer table. */
+#define AMB_SPRITE_N {n}
+#define AMB_TILE_BYTES 1280
+#define AMB_PAL_OFF (AMB_SPRITE_N * AMB_TILE_BYTES)
+#define AMB_PAL_BYTES 22
+#define AMB_DOT_OFF (AMB_PAL_OFF + AMB_SPRITE_N * AMB_PAL_BYTES)
+#define AMB_PICK_MASK {mask}  /* smallest 2^k-1 >= N-1, for rejection sampling */
+static const u8 ambSpriteCols[AMB_SPRITE_N] = {{{cols_arr}}};
+static const u8 ambSpriteMotion[AMB_SPRITE_N] = {{{mot_arr}}}; /* 0=H, 1=D */
+#endif
+""")
+
     # ---- cursor sprite ----
-    # Deliberately oval: 2px shorter than wide so the axle pin reads centered
-    # inside it on screen (user-tuned; don't "fix" back to a circle).
+    # Deliberately oval AND vertically centered on row 8 (not 7.5): the sprite
+    # sits at vertex-8, putting the axle pin's center on sprite row 8, so the
+    # ring is squashed and 1px shorter on top to wrap the pin symmetrically
+    # (user-tuned; don't "fix" back to a circle or re-center on 7.5).
     cur = [[0] * 16 for _ in range(16)]
     for y in range(16):
         for x in range(16):
-            d2 = (x - 7.5) ** 2 + ((y - 7.5) * (7.5 / 6.0)) ** 2
+            d2 = (x - 7.5) ** 2 + ((y - 8.0) * (7.5 / 6.0)) ** 2
             if 27.0 <= d2 <= 56.0:
                 cur[y][x] = 1
             elif 18.0 <= d2 < 27.0 or 56.0 < d2 <= 68.0:

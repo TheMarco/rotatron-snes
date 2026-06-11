@@ -31,6 +31,7 @@ SFX = [
     ("COLORELIM", "s-coloreliminated"),
     ("LEVELUP", "s-levelup"),
     ("GAMEOVER", "s-gameover"),
+    ("LOGOTHUD", "s-logothud"),
 ]
 
 
