@@ -1,12 +1,14 @@
 *.obj
 *.ps
 *.asp
+*.dbg
 *.sfc
 *.sym
 linkfile
 src/*.asm
 src/core/*.asm
 tests/build/
+.build-stamps/
 __pycache__/
 res/*.pic
 res/*.pal

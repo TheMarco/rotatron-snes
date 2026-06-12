@@ -17,3 +17,9 @@ else
     diff tests/build/expected.txt tests/build/actual.txt | head -30
     exit 1
 fi
+
+cc -DHOST_BUILD -Itests/host_stubs -Iinclude -Wall -Wextra -Wno-missing-braces -O1 \
+    src/core/rng.c src/core/board.c src/core/spin.c src/core/rules.c src/core/seams.c src/core/score.c \
+    src/boardtab.c tests/host_game_main.c \
+    -o tests/build/host_game
+tests/build/host_game

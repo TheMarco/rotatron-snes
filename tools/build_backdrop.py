@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Convert backdrops/level1.png into the BG2 backdrop layer.
+"""Convert backdrops/level1-4.png into the BG2 backdrop layers.
 
-256x256 source -> center-cropped 256x224, quantized to 15 colors (BG
+256x256 source -> 32x32 seamless tilemap, quantized to 15 colors (BG
 sub-palette 7, slot 0 transparent), 8x8 tiles deduplicated across H/V flips.
-Outputs res/bg2.pic / res/bg2.map / res/bg2.pal. The board (BG1) renders on
+Outputs res/bgl{1..4}.pic/.map/.pal. The board (BG1) renders on
 top; everything outside the hex and under blanked spin cells shows this.
 """
 

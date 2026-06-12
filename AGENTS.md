@@ -29,11 +29,12 @@ diverge, update this file to match the code.
 - Host-side tests: clang + Node driving the REAL `../hex-spin` JS modules
 
 Scripts:
-- `make` — build `rotatron.sfc` (+ FastROM patch)
+- `make` — build `rotatron.sfc` (+ FastROM patch; generates missing gfx/audio)
 - `make run` — build + deploy into OpenEmu's library
 - `make gfx` — regenerate ALL graphics (board tiles, backdrops, title/logo)
 - `make songs` — regenerate music modules from `music/*.mid` + SFX bank
-- `make test` — golden tests (JS vs C, ~12.4K lines diffed verbatim)
+- `make test` — golden tests (JS vs C, ~12.4K lines diffed verbatim) + host
+  checks for the SNES-side game state machine
 
 Always cold-boot after deploying: OpenEmu keeps the loaded ROM in memory and
 auto-resumes save states (the deploy step deletes the auto-state, but an
@@ -74,7 +75,8 @@ tools/
   build_board_gfx.py   board tileset/tables/spin frames/cursor/pulse/spark/
                        ambient sprites + res/preview.png
   build_backdrop.py    level1-4.png -> bgl1-4 (BG2) + twinkle table
-  build_title8.py      mode-3 8bpp title + studio logo (texts baked in)
+  build_title8.py      mode-3 8bpp title + studio logo (texts baked in; uses
+                       local/fallback logo if the sibling source is absent)
   build_audio.py       s-*.mp3 -> res/sfx.it + audio_sfx.h
   mid2it.py            .mid -> snesmod .it (+preview wav); optional bpm arg
   verify_board_render.py  pixel-diffs the emitted tiles/tables vs ground truth
@@ -83,6 +85,7 @@ tools/
 tests/
   gen_golden.mjs    drives ../hex-spin JS with seeded RNG -> expected.txt
   host_main.c       replays the same scenario through the C core
+  host_game_main.c  white-box host checks for heat/cascade/phase glue
   run_host_tests.sh clang build + diff
 ```
 
@@ -167,10 +170,10 @@ slots (per-phase sets in generated `bg2tab.h`). Swapped per phase under
 force-blank.
 
 HUD on BG3 (2bpp, mode-1 BG3-priority = above everything): deadfall's font
-(`res/hudfont.pic`, ASCII 32-95) in BG1's tile-page tail (BG bases must be
-4K-word aligned!), procedural heat-bar/panel-border tiles, 3px-lowered digit
-glyphs split across two tile rows. 2bpp sub-pal 7 = CGRAM 28-31 (unused tail
-of BG1 sub-pal 1).
+(`res/hudfont.pic`, ASCII 32-95; `make gfx` creates a deterministic fallback
+if it is absent) in BG1's tile-page tail (BG bases must be 4K-word aligned!),
+procedural heat-bar/panel-border tiles, 3px-lowered digit glyphs split across
+two tile rows. 2bpp sub-pal 7 = CGRAM 28-31 (unused tail of BG1 sub-pal 1).
 
 ### OBJ layout (OBSEL: base 0x6000, 16/32 sizes)
 
@@ -197,6 +200,8 @@ columns set the hi-table X8 bit (unset, they wrapped to x&0xFF — the old
 "two ships" bug). NO per-scanline
 suppression: one flyer + spin/pulse/cursor/sparks stays under the 34-tile cap.
 TO ADD A TYPE: drop a PNG in sprites/ + one row in AMB_SPRITES, `make gfx`.
+Rows whose PNG is missing are skipped with a generator warning, so clean
+checkouts can still rebuild with the tracked sprite set.
 
 **Spin animation:** pre-rendered sector-indexed frames (0..50°, true-space
 rotation re-squashed); `spinAnimBegin` writes the ring's actual colors into
@@ -235,6 +240,9 @@ color (31), title blink (255 in mode 3).
   covering sprites appear (one-frame OAM-vs-map latency = black flash).
   The spin blanks cells at tick 2 under live sprites and lingers the
   sprites one frame over the result (`animTick == 0xFE`).
+- Define `RENDER_VBLANK_DIAG=1` (or build with PVSnesLib debug) to track
+  per-NMI DMA bytes, worst bytes, and whether the one-large-transfer/budget
+  contract was violated.
 
 ---
 

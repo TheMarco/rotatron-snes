@@ -3,6 +3,25 @@
 
 #include "core_types.h"
 
+#ifndef RENDER_VBLANK_DIAG
+#ifdef PVSNESLIB_DEBUG
+#define RENDER_VBLANK_DIAG 1
+#else
+#define RENDER_VBLANK_DIAG 0
+#endif
+#endif
+
+#define RENDER_VBLANK_BUDGET_BYTES 3700
+#define RENDER_VBLANK_FLAG_OVER_BUDGET 0x01
+#define RENDER_VBLANK_FLAG_MULTI_LARGE 0x02
+
+#if RENDER_VBLANK_DIAG
+extern u16 renderVBlankLastBytes;
+extern u16 renderVBlankWorstBytes;
+extern u8 renderVBlankLastLargeTransfers;
+extern u8 renderVBlankFlags;
+#endif
+
 /* VRAM layout (word addresses)
  *   0x0000  BG1 tilemap (32x32)
  *   0x0400  BG3 tilemap (HUD, later)
@@ -66,7 +85,7 @@ void renderInit(void);
 void boardRebuildMap(void);   /* boardColor -> mapBuf (full rebuild, slow: init only) */
 void triRefresh(u8 t);        /* recompute one triangle's cells */
 void ringRefresh(u8 k, u8 j); /* recompute the 6 on-board ring triangles */
-void renderVBlank(void);      /* call right after WaitForVBlank: DMA dirty map */
+void renderVBlank(void);      /* NMI hook; direct calls only while force-blanked */
 void cursorUpdate(u8 k, u8 j, u8 frame);
 void renderCursorHide(u8 hide);
 

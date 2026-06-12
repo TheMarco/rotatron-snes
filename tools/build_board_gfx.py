@@ -13,7 +13,8 @@ Layers, in priority order per pixel:
 Every 8x8 tile reduces to a "structure" (per-pixel role: outside/fillA/lineA/
 fillB/lineB/axis-core/axis-halo) with 0, 1, or 2 owner triangles (asserted).
 Tiles are emitted per (structure x color combo), deduplicated across H/V
-flips. Runtime recolor: entry = entryTable[structBase[s] + cA*6+cB | cA | 0].
+flips. Runtime recolor: dual-owner entries use cA*9+cB; single-owner tiles
+come from the base entry plus BG sub-palette bits or display variants.
 
 Variants for the spin animation: "half" tiles (one owner side blanked, axis
 kept) and "axis-only" tiles, so blanking the rotating ring never erases pins
@@ -35,6 +36,8 @@ from pathlib import Path
 
 import numpy as np
 import PIL.Image
+import PIL.ImageDraw
+import PIL.ImageFont
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -248,7 +251,47 @@ def encode_tile_4bpp(getpx):
     return planes
 
 
+def encode_tile_2bpp(getpx):
+    planes = bytearray(16)
+    for y in range(8):
+        b0 = b1 = 0
+        for x in range(8):
+            c = getpx(x, y)
+            bit = 0x80 >> x
+            if c & 1:
+                b0 |= bit
+            if c & 2:
+                b1 |= bit
+        planes[y * 2] = b0
+        planes[y * 2 + 1] = b1
+    return planes
+
+
+def ensure_hud_font():
+    """Create a deterministic fallback HUD font if no project-local one exists."""
+    out = ROOT / "res/hudfont.pic"
+    if out.exists():
+        return
+    out.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        font = PIL.ImageFont.load_default(size=8)
+    except TypeError:
+        font = PIL.ImageFont.load_default()
+    pic = bytearray()
+    for code in range(32, 96):
+        img = PIL.Image.new("L", (8, 8), 0)
+        draw = PIL.ImageDraw.Draw(img)
+        ch = chr(code)
+        if ch != " ":
+            draw.text((0, -1), ch, font=font, fill=255)
+        px = img.load()
+        pic += encode_tile_2bpp(lambda x, y, px=px: 1 if px[x, y] >= 96 else 0)
+    out.write_bytes(pic)
+    print("hudfont: generated fallback res/hudfont.pic")
+
+
 def main():
+    ensure_hud_font()
     tris, tri_of = build_triangles()
     assert len(tris) == 54, len(tris)
     verts = valid_vertices(tri_of)
@@ -780,10 +823,28 @@ def main():
         for msg in warn:
             print(f"  [sprite lint] {name}: WARNING - {msg}")
 
+    def fallback_sprite():
+        img = PIL.Image.new("RGBA", (80, 32), (255, 255, 255, 0))
+        draw = PIL.ImageDraw.Draw(img)
+        draw.polygon([(8, 16), (24, 8), (56, 8), (72, 16), (56, 24), (24, 24)],
+                     fill=(130, 160, 180, 255))
+        draw.line([(18, 16), (62, 16)], fill=(230, 245, 255, 255), width=1)
+        return img
+
+    active_sprites = []
+    for spec in AMB_SPRITES:
+        name, png, crop, cols, motion = spec
+        if (ROOT / 'sprites' / png).exists():
+            active_sprites.append(spec)
+        else:
+            print(f"  [sprite lint] {name}: WARNING - sprites/{png} missing; skipping")
+    if not active_sprites:
+        active_sprites = [('fallback', None, None, 5, 'H')]
+
     amb_tiles, amb_pals = bytearray(), bytearray()
     rows_list = []
-    for name, png, crop, cols, motion in AMB_SPRITES:
-        img = PIL.Image.open(ROOT / 'sprites' / png)
+    for name, png, crop, cols, motion in active_sprites:
+        img = fallback_sprite() if png is None else PIL.Image.open(ROOT / 'sprites' / png)
         lint_sprite(name, img, crop)
         tmask = transparent_mask(img)         # alpha if present, else flood-fill
         rgb = np.array(img.convert('RGB'))
@@ -817,12 +878,12 @@ def main():
     (ROOT / "res/ambient.pic").write_bytes(amb)
 
     # Generated companion header: sprite count, per-type cols/motion, offsets.
-    n = len(AMB_SPRITES)
+    n = len(active_sprites)
     mask = 1
     while mask < n - 1:
         mask = mask * 2 + 1
-    cols_arr = ", ".join(str(s[3]) for s in AMB_SPRITES)
-    mot_arr  = ", ".join('1' if s[4] == 'D' else '0' for s in AMB_SPRITES)
+    cols_arr = ", ".join(str(s[3]) for s in active_sprites)
+    mot_arr  = ", ".join('1' if s[4] == 'D' else '0' for s in active_sprites)
     rows_arr = ", ".join(str(r) for r in rows_list)
     (ROOT / "include/ambtab.h").write_text(f"""\
 #ifndef AMBTAB_H

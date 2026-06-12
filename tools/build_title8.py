@@ -6,8 +6,8 @@
       palette indices (254 = static white, 255 = CGRAM-blinked at runtime).
       The pic is split into two files so each ROM section fits a 32KB bank.
   res/title8.map / title8.pal    - 32x32 map + 256-color palette
-  res/logo8.pic / .map / .pal    - the studio logo (original RGBA source from
-      ../cubed), centered on black with its top edge at y=92 (LOGO_TARGET).
+  res/logo8.pic / .map / .pal    - the studio logo, preferring a local source
+      and falling back to a simple baked text mark when no logo PNG is present.
 
 8bpp tiles dedupe across H/V flips (palette is global, so flips are safe).
 """
@@ -16,7 +16,11 @@ from pathlib import Path
 from PIL import Image, ImageFilter
 
 ROOT = Path(__file__).resolve().parent.parent
-LOGO_SRC = Path("/Users/marcovhv/projects/GIT/cubed/public/sprites/gamestudios.png")
+LOGO_SRCS = [
+    ROOT / "backdrops/logo.png",
+    ROOT / "assets/gamestudios.png",
+    ROOT.parent / "cubed/public/sprites/gamestudios.png",
+]
 W, H = 256, 224
 LOGO_TARGET = 92
 
@@ -49,6 +53,35 @@ def bake_text(idx_img, glyphs, text, row, color_index):
                 if rows[y] & (0x80 >> x):
                     idx_img[(row * 8 + y) * W + x0 + i * 8 + x] = color_index
     return idx_img
+
+
+def draw_rgba_text(img, glyphs, text, x0, y0, rgba):
+    px = img.load()
+    for i, ch in enumerate(text):
+        rows = glyphs.get(ch)
+        if rows is None:
+            continue
+        for y in range(8):
+            py = y0 + y
+            if py < 0 or py >= img.height:
+                continue
+            for x in range(8):
+                px0 = x0 + i * 8 + x
+                if 0 <= px0 < img.width and rows[y] & (0x80 >> x):
+                    px[px0, py] = rgba
+
+
+def load_logo():
+    for path in LOGO_SRCS:
+        if path.exists():
+            return Image.open(path).convert("RGBA"), path
+
+    glyphs = font_glyphs()
+    logo = Image.new("RGBA", (160, 48), (0, 0, 0, 0))
+    draw_rgba_text(logo, glyphs, "MARCO", 60, 10, (255, 255, 255, 255))
+    draw_rgba_text(logo, glyphs, "GAME STUDIOS", 36, 26, (190, 220, 255, 255))
+    print("logo8: no logo PNG found; generated fallback text logo")
+    return logo, None
 
 
 def encode_tile_8bpp(px):
@@ -182,7 +215,9 @@ def main():
         title = title.resize((W, H), Image.LANCZOS)
     convert8(title, "title8", texts=True)
 
-    logo = Image.open(LOGO_SRC).convert("RGBA")
+    logo, logo_src = load_logo()
+    if logo_src:
+        print(f"logo8: using {logo_src}")
     canvas = Image.new("RGBA", (W, H), (0, 0, 0, 255))
     canvas.paste(logo, ((W - logo.width) // 2, LOGO_TARGET), logo)
     convert8(canvas.convert("RGB"), "logo8")

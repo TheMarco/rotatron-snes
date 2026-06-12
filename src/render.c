@@ -118,6 +118,34 @@ static u16 ambX, ambY;                       /* biased 9.7 fixed point */
 static s16 ambDX, ambDY;
 static u16 ambCool;
 
+#if RENDER_VBLANK_DIAG
+u16 renderVBlankLastBytes;
+u16 renderVBlankWorstBytes;
+u8 renderVBlankLastLargeTransfers;
+u8 renderVBlankFlags;
+
+#define VBD_BEGIN() do { \
+    renderVBlankLastBytes = 0; \
+    renderVBlankLastLargeTransfers = 0; \
+} while (0)
+#define VBD_ADD(bytes, large) do { \
+    renderVBlankLastBytes = (u16)(renderVBlankLastBytes + (u16)(bytes)); \
+    if (large) renderVBlankLastLargeTransfers++; \
+} while (0)
+#define VBD_END() do { \
+    if (renderVBlankLastBytes > renderVBlankWorstBytes) \
+        renderVBlankWorstBytes = renderVBlankLastBytes; \
+    if (renderVBlankLastBytes > RENDER_VBLANK_BUDGET_BYTES) \
+        renderVBlankFlags |= RENDER_VBLANK_FLAG_OVER_BUDGET; \
+    if (renderVBlankLastLargeTransfers > 1) \
+        renderVBlankFlags |= RENDER_VBLANK_FLAG_MULTI_LARGE; \
+} while (0)
+#else
+#define VBD_BEGIN() do {} while (0)
+#define VBD_ADD(bytes, large) do { (void)(bytes); (void)(large); } while (0)
+#define VBD_END() do {} while (0)
+#endif
+
 static void renderZeroState(void); /* defined at file end, after all statics */
 static void ambHideAll(void);      /* hide the ambient flyer's OAM slots 23-32 */
 static void rippleInit(void);      /* pre-fill HDMA table with zero-offset entries */
@@ -371,8 +399,7 @@ void boardRebuildMap(void) {
 
 /* Incremental recolor: a full rebuild costs several frames of 65816 time
  * (the visible 'pause' at the end of a spin); refreshing only the cells a
- * triangle owns keeps every transition within one frame - and the changed
- * words go through the queue, not a 2KB DMA. */
+ * triangle owns keeps the staged dirty tile-row span small for the next DMA. */
 void triRefresh(u8 t) {
     u16 o;
     for (o = triCellOfs[t]; o < triCellOfs[t + 1]; o++) {
@@ -426,12 +453,15 @@ void howtoHexDemo(u8 k, u8 j, u8 color) {
  * random tile corruption. Also still called directly during force-blank
  * boot/transition loads (safe: it only consumes staged state). */
 void renderVBlank(void) {
+    VBD_BEGIN();
     if (sceneMode) { /* logo / title: pinned scroll + the blink entry only */
         bgSetScroll(0, 0, sceneV);
         if (blinkDirty) {
+            VBD_ADD(2, 0);
             dmaCopyCGram((u8 *)&blinkColor, 255, 2);
             blinkDirty = 0;
         }
+        VBD_END();
         return;
     }
     if (tmStage) { /* staged main-screen layer switch (stage transitions) */
@@ -473,16 +503,19 @@ void renderVBlank(void) {
     }
     bgSetScroll(2, 0, 0x3F7);
     if (heatColorDirty) {
+        VBD_ADD(2, 0);
         dmaCopyCGram((u8 *)&heatColor, 31, 2);
         heatColorDirty = 0;
     }
     if (ambPalDirty) {
-        /* OBJ pal 0 indices 5-15 (CGRAM words 133-143): ship or voyager colors */
+        /* OBJ pal 0 indices 5-15 (CGRAM words 133-143): active flyer colors */
+        VBD_ADD(22, 0);
         dmaCopyCGram((u8 *)ambPalBuf, 133, 22);
         ambPalDirty = 0;
     }
     if (dotPalDirty) {
         u8 c;
+        VBD_ADD(12, 0);
         for (c = 0; c < 6; c++)
             dmaCopyCGram((u8 *)&lineBGR[c], (u16)(128 + (2 + c) * 16 + 1), 2);
         dotPalDirty = 0;
@@ -496,33 +529,38 @@ void renderVBlank(void) {
      * flyer's bottom half under every new ship - the "junk under the ship"
      * bug. ambientFrame holds the flyer off-screen until the last row lands. */
     if (mapDirty) {
+        u16 mapBytes;
         /* only the dirty tile-row span: a spin/glow touches ~6-10 rows
          * (~640B) - the full 2KB goes only on rebuilds */
+        mapBytes = (u16)((u16)(mapRowHi - mapRowLo + 1) << 6);
+        VBD_ADD(mapBytes, 1);
         dmaCopyVram((u8 *)mapBuf + ((u16)mapRowLo << 6),
                     (u16)(VRAM_BG1_MAP + ((u16)mapRowLo << 5)),
-                    (u16)((u16)(mapRowHi - mapRowLo + 1) << 6));
+                    mapBytes);
         mapDirty = 0;
     } else if (ambTileStep) {
         u8 strip = ambTotalStrips - ambTileStep;
         u16 nbytes = (strip < 4) ? 320 : 192;
         u8 *s = (u8 *)&ambient_pic + (u16)ambType * AMB_TILE_BYTES + (u16)strip * 320;
+        VBD_ADD(nbytes, 1);
         dmaCopyVram(s, ambRowDest[strip], nbytes);
         ambTileStep--;
     } else if (hudDirty) {
+        VBD_ADD(0x800, 1);
         dmaCopyVram((u8 *)hudMap, VRAM_BG3_MAP, 0x800);
         hudDirty = 0;
     }
-    /* Small CGRAM stages land FIRST (they always fit); the big map DMAs go
-     * last so only their own tail is ever at risk - and the queue makes the
-     * common case (spins, strobes) a few dozen port pokes, which is what
-     * keeps accurate-timing emulators (bsnes) happy in overscan's shorter
-     * vblank. The two 2KB maps still never ship in the same vblank. */
+    /* Small CGRAM stages fit beside the single big DMA chosen above. The board
+     * map, ambient tile stream, and HUD map stay mutually exclusive so two 2KB
+     * map-like transfers never ship in the same vblank. */
     if (objPalDirty) {
+        VBD_ADD(32, 0);
         dmaCopyCGram((u8 *)objPalBuf, 144, 32); /* OBJ palette 1 */
         objPalDirty = 0;
     }
     if (glowDirty) {
         u8 c;
+        VBD_ADD(14, 0);
         dmaCopyCGram((u8 *)&glowColor, GLOW_CGRAM, 2);
         for (c = 0; c < 6; c++) /* per-color sub-palette mirrors */
             dmaCopyCGram((u8 *)&glowColor, GLOW_CGRAM_C(c), 2);
@@ -530,6 +568,7 @@ void renderVBlank(void) {
     }
     if (lineDirty) {
         u8 c;
+        VBD_ADD(24, 0);
         dmaCopyCGram((u8 *)lineBuf, 7, 12); /* sub-pal 0 lines 7..12 */
         for (c = 0; c < 6; c++)             /* per-color line slot mirrors */
             dmaCopyCGram((u8 *)&lineBuf[c], (u16)(16 * (c + 1) + 2), 2);
@@ -537,6 +576,7 @@ void renderVBlank(void) {
     }
     if (twDirty) {
         u8 i;
+        VBD_ADD(TWINKLE_N * 2, 0);
         for (i = 0; i < TWINKLE_N; i++)
             dmaCopyCGram((u8 *)&twBuf[i], (u16)(112 + twSlot[twSet][i]), 2);
         twDirty = 0;
@@ -554,6 +594,7 @@ void renderVBlank(void) {
     } else {
         REG_HDMAEN = 0x00;   /* no HDMA channels active */
     }
+    VBD_END();
 }
 
 /* Breathing outlines: all six neon line colors ease toward white and back
@@ -1392,4 +1433,10 @@ static void renderZeroState(void) {
     barPx = 0xFF;
     cursorHidden = 0;
     sceneMode = 0;
+#if RENDER_VBLANK_DIAG
+    renderVBlankLastBytes = 0;
+    renderVBlankWorstBytes = 0;
+    renderVBlankLastLargeTransfers = 0;
+    renderVBlankFlags = 0;
+#endif
 }
