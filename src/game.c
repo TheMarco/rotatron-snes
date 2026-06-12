@@ -20,7 +20,7 @@ static u8 animCcw, animK, animJ;
  * Drain: 0.00886/s (phase-1 multiplier = 1) -> 4.84/frame, accumulated in
  * 1/256ths so no fraction is lost. Gain: 0.18*n^2 per cleared wave. */
 #define HEAT_FULL 32768U
-#define HEAT_DRAIN_256 1239 /* 32768 * 0.00886 / 60 * 256 */
+#define HEAT_DRAIN_256 1982 /* web rate x0.8 (felt too fast); ~70s full drain */
 #define HEAT_DANGER 9830    /* 0.3 */
 static u16 heat, heatAcc;
 static u8 gameOver;
@@ -36,7 +36,7 @@ static void heatGain(u8 n) {
 /* Phases (state.js): 1..4, +1 active color each; the phase's NEW color is
  * color index phase+1 and scores double. */
 static u8 phase, activeColors;
-static const u16 drain256ByPhase[5] = {0, 1239, 1512, 1784, 2057}; /* +22%/phase */
+static const u16 drain256ByPhase[5] = {0, 1982, 2419, 2854, 3291}; /* +22%/phase, x0.8 */
 
 /* Stage-complete transition: strobe + shake -> the board mosaic-dissolves
  * into blocks -> STAGE N COMPLETE stats panel with celebration shockwaves
@@ -45,13 +45,14 @@ static const u16 drain256ByPhase[5] = {0, 1239, 1512, 1784, 2057}; /* +22%/phase
 #define STG_NONE 0
 #define STG_FLASH 1
 #define STG_OUT 2
-#define STG_DOWN 3 /* fade to black; the heavy swaps happen AT black */
-#define STG_UP 4
-#define STG_PANEL 5
+#define STG_HOLD 3  /* stats over mosaiced board; START or timeout */
+#define STG_DOWN 4  /* fade to black; the heavy swaps happen AT black */
+#define STG_UP 5
 #define STG_IN 6
 #define STG_PANEL_HOLD 200
 static u8 stageState, pendingPhase, stageDone;
 static u16 stageTick;
+static u16 gameOverTimer; /* frames since game-over; spcStop at ~510 (one play) */
 
 /* Color elimination (rules.js): a color wiped from every non-affected cell
  * during a wave gets suppressed from refills for 4 spins and pays
@@ -187,6 +188,7 @@ static u8 cascadeCheck(void) {
     glowSet(WHITE_BGR);
     setAffDisp(DISP_GLOW);
     pulseStart(cascN, cascHexK, cascHexJ);
+    renderHexImpact(cascN, cascDepth);
     audioSfx(SFX_HEXAGON);
     if (cascDepth >= 2) audioSfx(SFX_EXTRABONUS); /* cascade escalation layer */
     heatGain(cascN);
@@ -276,6 +278,26 @@ static void stageFrame(u16 pressed) {
         case STG_OUT: /* the board dissolves into blocks */
             mosaicSet((u8)(stageTick >> 1));
             if (++stageTick >= 32) {
+                layersSet(0x16); /* hide the mosaic-15 block field */
+                /* Stats panel appears over the clean backdrop */
+                hudBox(6, 9, 20, 7);
+                hudText(8, 10, "STAGE");
+                hudNum(14, 10, stageDone, 1);
+                hudText(16, 10, "COMPLETE");
+                hudText(9, 12, "HEXES");
+                hudNum(18, 12, hexCount, 4);
+                hudText(9, 13, "SCORE");
+                hudDigits(15, 13, score, SCORE_DIGITS);
+                hudText(9, 14, "DRAIN RATE UP");
+                hudRefresh();
+                audioSfx(SFX_EXTRABONUS);
+                stageState = STG_HOLD;
+                stageTick = 0;
+            }
+            break;
+
+        case STG_HOLD: /* stats hold over mosaiced board; START or timeout */
+            if (++stageTick >= STG_PANEL_HOLD || (pressed & KEY_START)) {
                 stageState = STG_DOWN;
                 stageTick = 0;
             }
@@ -294,41 +316,19 @@ static void stageFrame(u16 pressed) {
                 setScreenOff();
                 bg2LoadPhase(phase);
                 twinkleSelect(phase - 1);
-                /* Drop BG1 while the stats panel sits over the new backdrop:
-                 * the dissolved board parked at mosaic 15 otherwise shows as
-                 * a big pixel blob. STG_IN restores it for the reveal. */
-                layersSet(0x16);
+                hudClear();
+                hudRefresh();
                 setScreenOn(); /* still brightness 0 */
                 setBrightness(0);
-                hudBox(6, 9, 20, 7);
-                hudText(8, 10, "STAGE");
-                hudNum(14, 10, stageDone, 1);
-                hudText(16, 10, "COMPLETE");
-                hudText(9, 12, "HEXES");
-                hudNum(18, 12, hexCount, 4);
-                hudText(9, 13, "SCORE");
-                hudDigits(15, 13, score, SCORE_DIGITS);
-                hudText(9, 14, "HEAT BONUS UP");
-                hudRefresh();
                 stageState = STG_UP;
                 stageTick = 0;
             }
             break;
 
-        case STG_UP: /* fade back in onto the stats panel */
+        case STG_UP: /* fade back in onto the new backdrop */
             setBrightness((u8)stageTick);
             if (++stageTick > 15) {
                 setBrightness(15);
-                audioSfx(SFX_EXTRABONUS);
-                stageState = STG_PANEL;
-                stageTick = 0;
-            }
-            break;
-
-        case STG_PANEL: /* stats hold over the new backdrop */
-            if (++stageTick >= STG_PANEL_HOLD || (pressed & KEY_START)) {
-                hudClear();
-                hudRefresh();
                 layersSet(0x17); /* BG1 back on: re-forms from mosaic 15 */
                 stageState = STG_IN;
                 stageTick = 0;
@@ -355,6 +355,7 @@ void gameInit(void) {
     heat = HEAT_FULL;
     heatAcc = 0;
     gameOver = 0;
+    gameOverTimer = 0;
     hexCount = 0;
     entropy = 0;
     phase = 1;
@@ -388,6 +389,7 @@ static void heatFrame(void) {
 
 static void enterGameOver(void) {
     gameOver = 1;
+    gameOverTimer = 0;
     spinAnimEnd();
     pulseEnd();
     hudText(11, 12, "GAME OVER");
@@ -449,6 +451,8 @@ void gameFrame(u16 pressed) {
     entropy += 1 + (pressed & 15); /* press timing feeds restart seeds */
 
     if (gameOver) {
+        if (gameOverTimer < 510) gameOverTimer++;
+        else if (gameOverTimer == 510) { spcStop(); gameOverTimer++; }
         if (pressed & KEY_START) restartRun();
         return;
     }

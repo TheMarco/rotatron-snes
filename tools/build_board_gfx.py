@@ -637,10 +637,11 @@ def main():
     # at spawn. Each type is emitted as 4 contiguous "tile rows" of 10 tiles
     # (320 bytes) = 1280 bytes, landing at OBJ tiles 386 / 402 / 484 / 500.
     #
-    # TO ADD A NEW SPRITE: drop an <=80x32 PNG (white = transparent) in
+    # TO ADD A NEW SPRITE: drop an <=80x48 PNG (white = transparent) in
     # sprites/ and add a row below. crop=(x0,x1) trims source columns (None =
     # whole image), cols = how many 16px OBJ columns to display (ceil(w/16)),
     # motion = 'H' straight horizontal or 'D' gentle downward diagonal.
+    # Sprites taller than 32px are center-cropped vertically to 32px.
     #   ambient.pic layout: N*1280 tile bytes, then N*22 palette bytes
     #   (11 BGR555 colors -> OBJ pal0 idx 5-15), then 128 bytes dot (4 tiles).
     AMB_SPRITES = [
@@ -654,6 +655,10 @@ def main():
         ('firefly',       'firefly.png',       None,     5,   'H'),
         ('stardestroyer', 'stardestroyer.png', None,     5,   'H'),
         ('starship',      'starship.png',      None,     5,   'H'),
+        ('pillar',        'pillar.png',        None,     5,   'H'),
+        ('borg',          'borg.png',          None,     3,   'D'),  # 48x48, center-cropped to 32px
+        ('deathstar',     'deathstar.png',     None,     3,   'D'),  # 48x48, center-cropped to 32px
+        ('endurance',     'endurance.png',     None,     3,   'H'),  # 48x48, center-cropped to 32px
     ]
 
     def quantize_png(arr, n=11):
@@ -691,51 +696,32 @@ def main():
 
     def transparent_mask(img):
         """HxW bool mask of transparent pixels. Uses the alpha channel if the
-        PNG has one; otherwise flood-fills the white background from the border
-        so white INSIDE the sprite is kept (these PNGs are flattened RGB)."""
+        PNG has one. For RGB-only PNGs (no alpha), treats all near-white pixels
+        as transparent — ship art is gray/dark; white = background."""
         if img.mode in ('RGBA', 'LA', 'P'):
             alpha = np.array(img.convert('RGBA'))[:, :, 3]
             if (alpha < 255).any():
                 return alpha < 128
         a = np.array(img.convert('RGB'))
-        h, w = a.shape[:2]
-        whiteish = np.all(a >= 250, axis=2)
-        bg = np.zeros((h, w), bool)
-        from collections import deque
-        dq = deque()
-        for x in range(w):
-            for y in (0, h - 1):
-                if whiteish[y, x] and not bg[y, x]:
-                    bg[y, x] = True; dq.append((y, x))
-        for y in range(h):
-            for x in (0, w - 1):
-                if whiteish[y, x] and not bg[y, x]:
-                    bg[y, x] = True; dq.append((y, x))
-        while dq:
-            y, x = dq.popleft()
-            for dy, dx in ((0, 1), (0, -1), (1, 0), (-1, 0)):
-                ny, nx = y + dy, x + dx
-                if 0 <= ny < h and 0 <= nx < w and whiteish[ny, nx] and not bg[ny, nx]:
-                    bg[ny, nx] = True; dq.append((ny, nx))
-        return bg
+        return np.all(a >= 250, axis=2)
 
-    def sprite_5col_tiles(idx2d):
-        """Encode an 80x32 index map as 4 tile rows x 10 tiles = 1280 bytes."""
+    def sprite_6strip_tiles(idx2d):
+        """Encode an 80x48 index map as 6 strips x 10 tiles = 1920 bytes."""
         out = bytearray()
-        for ty in range(4):            # tile rows: y = 0,8,16,24
+        for ty in range(6):            # tile rows: y = 0,8,16,24,32,40
             for tx in range(10):       # 10 tiles across (80px)
                 out += encode_tile_4bpp(
                     lambda x, y, tx=tx, ty=ty: int(idx2d[ty * 8 + y][tx * 8 + x]))
         return out
 
-    def place_80(content, cmask):
-        """Top-left an HxW (<=80) RGB sprite + its transparency mask into an
-        80x32 canvas. Returns (rgb, trans); the padding is transparent."""
-        canvas = np.zeros((32, 80, 3), dtype=np.uint8)
-        trans = np.ones((32, 80), dtype=bool)   # padding = transparent
-        h, w = min(32, content.shape[0]), min(80, content.shape[1])
-        canvas[:h, :w, :] = content[:h, :w, :]
-        trans[:h, :w] = cmask[:h, :w]
+    def place_canvas(content, cmask):
+        """Place sprite content into an 80x48 canvas, top-left, no cropping."""
+        canvas = np.zeros((48, 80, 3), dtype=np.uint8)
+        trans = np.ones((48, 80), dtype=bool)
+        src_h = min(content.shape[0], 48)
+        src_w = min(content.shape[1], 80)
+        canvas[:src_h, :src_w, :] = content[:src_h, :src_w, :]
+        trans[:src_h, :src_w] = cmask[:src_h, :src_w]
         return canvas, trans
 
     def pal_bgr555(pal):
@@ -757,9 +743,9 @@ def main():
         h, w = al.shape
         warn = []
         if img.mode not in ('RGBA', 'LA', 'P'):
-            warn.append("no alpha channel (RGB) - transparency guessed by flood-fill")
-        if W > 80 or H > 32:
-            warn.append(f"{W}x{H} exceeds 80x32 (cropped/clipped to fit)")
+            warn.append("no alpha channel (RGB) - all near-white pixels treated as transparent")
+        if W > 80 or H > 48:
+            warn.append(f"{W}x{H} exceeds 80x48 (clipped to fit)")
         semi = int(((al > 0) & (al < 255)).sum())
         if semi:
             warn.append(f"{semi} semi-transparent px - SNES alpha is on/off, "
@@ -795,6 +781,7 @@ def main():
             print(f"  [sprite lint] {name}: WARNING - {msg}")
 
     amb_tiles, amb_pals = bytearray(), bytearray()
+    rows_list = []
     for name, png, crop, cols, motion in AMB_SPRITES:
         img = PIL.Image.open(ROOT / 'sprites' / png)
         lint_sprite(name, img, crop)
@@ -803,10 +790,14 @@ def main():
         if crop is not None:
             rgb = rgb[:, crop[0]:crop[1], :]
             tmask = tmask[:, crop[0]:crop[1]]
-        idx, pal = quantize_png(place_80(rgb, tmask))
-        amb_tiles += sprite_5col_tiles(idx)   # 1280 bytes
-        amb_pals += pal_bgr555(pal)           # 22 bytes
+        sprite_rows = 3 if rgb.shape[0] > 32 else 2
+        rows_list.append(sprite_rows)
+        if sprite_rows == 3:
+            assert cols <= 3, f"{name}: 3-row sprite needs cols<=3 (got {cols})"
         assert 1 <= cols <= 5, f"{name}: cols {cols} out of 1..5"
+        idx, pal = quantize_png(place_canvas(rgb, tmask))
+        amb_tiles += sprite_6strip_tiles(idx)   # 1920 bytes
+        amb_pals += pal_bgr555(pal)             # 22 bytes
 
     # HUD phase-color dot: small hexagon, palette index 1 (each dot sprite
     # selects one of OBJ palettes 2..7 whose slot 1 holds a neon color).
@@ -831,19 +822,21 @@ def main():
     while mask < n - 1:
         mask = mask * 2 + 1
     cols_arr = ", ".join(str(s[3]) for s in AMB_SPRITES)
-    mot_arr = ", ".join('1' if s[4] == 'D' else '0' for s in AMB_SPRITES)
+    mot_arr  = ", ".join('1' if s[4] == 'D' else '0' for s in AMB_SPRITES)
+    rows_arr = ", ".join(str(r) for r in rows_list)
     (ROOT / "include/ambtab.h").write_text(f"""\
 #ifndef AMBTAB_H
 #define AMBTAB_H
 /* GENERATED by tools/build_board_gfx.py - do not edit. Ambient flyer table. */
 #define AMB_SPRITE_N {n}
-#define AMB_TILE_BYTES 1280
+#define AMB_TILE_BYTES 1920
 #define AMB_PAL_OFF (AMB_SPRITE_N * AMB_TILE_BYTES)
 #define AMB_PAL_BYTES 22
 #define AMB_DOT_OFF (AMB_PAL_OFF + AMB_SPRITE_N * AMB_PAL_BYTES)
 #define AMB_PICK_MASK {mask}  /* smallest 2^k-1 >= N-1, for rejection sampling */
 static const u8 ambSpriteCols[AMB_SPRITE_N] = {{{cols_arr}}};
 static const u8 ambSpriteMotion[AMB_SPRITE_N] = {{{mot_arr}}}; /* 0=H, 1=D */
+static const u8 ambSpriteRows[AMB_SPRITE_N] = {{{rows_arr}}};  /* 2 or 3 OBJ rows */
 #endif
 """)
 

@@ -13,7 +13,7 @@
 """
 
 from pathlib import Path
-from PIL import Image
+from PIL import Image, ImageFilter
 
 ROOT = Path(__file__).resolve().parent.parent
 LOGO_SRC = Path("/Users/marcovhv/projects/GIT/cubed/public/sprites/gamestudios.png")
@@ -68,7 +68,10 @@ def encode_tile_8bpp(px):
     return bytes(out)
 
 
-def convert8(im, name, texts=False):
+def convert8(im, name, texts=False, blur=0.0):
+    src = im  # retries re-blur from the original, not cumulatively
+    if blur:
+        im = im.filter(ImageFilter.GaussianBlur(blur))
     q = im.quantize(colors=253, dither=Image.Dither.NONE)
     qpal = q.getpalette()[: 253 * 3]
     qpal += [0] * (253 * 3 - len(qpal))  # PIL trims trailing unused entries
@@ -90,6 +93,7 @@ def convert8(im, name, texts=False):
         return tuple(t[7 - y] for y in range(8))
 
     tiles = [bytes(64)]
+    tile_px = [[[0] * 8 for _ in range(8)]]
     canonical = {tuple(tuple([0] * 8) for _ in range(8)): 0}
     entries = []
     for ty in range(H // 8):
@@ -105,10 +109,47 @@ def convert8(im, name, texts=False):
             if ent is None:
                 tid = len(tiles)
                 tiles.append(encode_tile_8bpp([list(r) for r in t]))
+                tile_px.append([list(r) for r in t])
                 canonical[t] = tid
                 ent = tid
             entries.append(ent)
-    assert len(tiles) <= 896, f"{len(tiles)} mode-3 tiles ({name})"
+    if len(tiles) > 896 + 64:  # way over the mode-3 budget: soften and retry
+        nblur = blur + 0.4
+        assert nblur <= 2.1, f"{len(tiles)} mode-3 tiles ({name}) even at blur {blur}"
+        print(f"{name}: {len(tiles)} tiles >> 896, retrying with blur {nblur}")
+        return convert8(src, name, texts=texts, blur=nblur)
+    if len(tiles) > 896:
+        # Busy art can have ZERO duplicate tiles (cap = 28x32 map + blank =
+        # 897): dedupe can't help, so merge the most-similar tile pairs (in
+        # RGB space) until it fits. A handful of merges is invisible. Tiles
+        # holding baked text (254/255) stay pixel-exact.
+        import numpy as np
+        n = len(tiles)
+        print(f"{name}: {n} tiles > 896, merging {n - 896} closest pair(s)")
+        lut = np.zeros((256, 3), np.float32)
+        for i in range(253):
+            lut[i + 1] = qpal[i * 3:i * 3 + 3]
+        lut[254] = lut[255] = (255, 255, 255)
+        grids = np.array(tile_px, np.uint8)            # (n,8,8) indices
+        vecs = lut[grids].reshape(n, -1)               # (n,192) RGB
+        droppable = np.array([not (g >= 254).any() for g in grids])
+        droppable[0] = False                           # keep the blank tile
+        d2 = ((vecs[:, None, :] - vecs[None, :, :]) ** 2).sum(2)
+        d2[:, ~droppable] = np.inf                     # column j = dropped tile
+        np.fill_diagonal(d2, np.inf)
+        remap = list(range(n))
+        for _ in range(n - 896):
+            i, j = np.unravel_index(np.argmin(d2), d2.shape)  # drop j, keep i
+            remap[j] = int(i)
+            d2[:, j] = np.inf
+            d2[j, :] = np.inf
+        for j in range(n):  # resolve merge chains (j -> i -> k)
+            while remap[remap[j]] != remap[j]:
+                remap[j] = remap[remap[j]]
+        alive = sorted(set(range(n)) - {j for j in range(n) if remap[j] != j})
+        newid = {old: k for k, old in enumerate(alive)}
+        tiles = [tiles[t] for t in alive]
+        entries = [(newid[remap[e & 0x3FF]] | (e & 0xC000)) for e in entries]
 
     pic = b"".join(tiles)
     if name == "title8":  # split so each ROM section fits a 32KB bank

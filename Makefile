@@ -70,10 +70,10 @@ gfx:
 # Rebuild music modules from music/*.mid (also writes res/*_preview.wav)
 # and the SFX bank from music/s-*.mp3.
 songs:
-	python3 tools/mid2it.py music/level1.mid level1 144
-	python3 tools/mid2it.py music/level2.mid level2 130
-	python3 tools/mid2it.py music/level3.mid level3 125
-	python3 tools/mid2it.py music/level4.mid level4 113
+	python3 tools/mid2it.py music/level1.mid level1
+	python3 tools/mid2it.py music/level2.mid level2
+	python3 tools/mid2it.py music/level3.mid level3
+	python3 tools/mid2it.py music/level4.mid level4
 	python3 tools/mid2it.py music/title.mid title 145
 	python3 tools/mid2it.py music/gameover.mid gameover 115
 	python3 tools/build_audio.py

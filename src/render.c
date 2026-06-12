@@ -5,6 +5,14 @@
 #include "ambtab.h"
 #include "render.h"
 
+/* HDMA channel 6 registers (per-scanline BG1 H-scroll shockwave ripple) */
+#define REG_HDMAEN     (*(vuint8 *)0x420C)
+#define HDMA6_CTRL     (*(vuint8 *)0x4360)
+#define HDMA6_REG      (*(vuint8 *)0x4361)
+#define HDMA6_ADDRL    (*(vuint8 *)0x4362)
+#define HDMA6_ADDRH    (*(vuint8 *)0x4363)
+#define HDMA6_ADDRB    (*(vuint8 *)0x4364)
+
 extern char board_pic, board_picend, board_pal;
 extern char cursor_pic, cursor_picend, cursor_pal;
 extern char spin_pic, pulse_pic, spark_pic, ambient_pic;
@@ -57,6 +65,7 @@ static u8 objPalDirty;
 /* Per-triangle display override (DISP_WHITE/HIDDEN/GLOW), 0xFF = boardColor.
  * Drives the clear flash/blackout/pop without touching game state. */
 u8 triDisp[N_TRIANGLES];
+static u8 demoTris[18], demoN; /* how-to pages: rings drawn since last reset */
 
 static u8 shakeT, shakeAmp;
 static u16 glowColor;
@@ -66,8 +75,16 @@ static u8 lineDirty;
 static u16 twBuf[TWINKLE_N]; /* backdrop twinkle colors, staged for vblank */
 static u8 twDirty;
 static u8 twSet; /* which backdrop's twinkle palette set (phase - 1) */
-static u8 mosVal; /* BG1 mosaic size, re-asserted every vblank */
+static u8 mosVal;      /* BG1 mosaic size, re-asserted every vblank */
+static u8 mosImpactT;  /* decay steps remaining for hex-impact mosaic burst */
+static u8 flashT;      /* frames remaining on white-flash color math */
+static u8 flashStep;   /* per-frame brightness decrement (flashT * flashStep = level) */
+static u8 bg1Shift;    /* extra BG1 down-shift in px (how-to illustrations) */
 static u16 bg2X, bg2Y; /* backdrop drift accumulators (8.8) */
+static s8 bg2Jolt;     /* short snap offset applied to BG2 Y, decays 2px/frame */
+static u8 rippleT;    /* 10..1 = shockwave active, 0 = off */
+static u8 rippleRad;  /* current ring radius in scanlines from center y=120 */
+static u8 rippleBuf[718]; /* HDMA linear table: {1,lo,hi}×239 + {0} end-marker */
 static u8 sceneMode;   /* mode-3 boot scene active: minimal vblank path */
 static u16 sceneV;     /* pinned BG1 vscroll during scenes */
 static u16 blinkColor; /* CGRAM 255: the baked PRESS START text */
@@ -81,14 +98,20 @@ static u8 dotPalDirty;
 /* Ambient sprite palette (OBJ pal 0 indices 5-15): staged per spawn. */
 static u8 ambPalBuf[22];
 static u8 ambPalDirty;
-static u8 ambTileStep; /* spawn: tile rows of the active sprite left to DMA (4..1) */
-static u8 tmStage;     /* nonzero: REG_TM value to apply at next vblank start */
-/* The flyer's four 320-byte tile rows in VRAM (word addresses). */
-static const u16 ambRowDest[4] = {
+static u8 ambTileStep;    /* spawn: strips left to DMA (ambTotalStrips..1) */
+static u8 ambTotalStrips; /* ambRows * 2 */
+static u8 ambRows;        /* 2 or 3 OBJ rows for the active sprite */
+static u8 tmStage;        /* nonzero: REG_TM value to apply at next vblank start */
+/* The flyer's tile strip destinations in VRAM (word addresses).
+ * Strips 0-3: shared by all sprites (320 bytes each).
+ * Strips 4-5: 3-row sprites only; 192 bytes each (6 tiles, cols 0-2). */
+static const u16 ambRowDest[6] = {
     VRAM_OBJ_TILES + 0x1000 + 130 * 16, /* tiles 386+: art rows 0-7   */
     VRAM_OBJ_TILES + 0x1000 + 146 * 16, /* tiles 402+: art rows 8-15  */
     VRAM_OBJ_TILES + 0x1000 + 228 * 16, /* tiles 484+: art rows 16-23 */
     VRAM_OBJ_TILES + 0x1000 + 244 * 16, /* tiles 500+: art rows 24-31 */
+    VRAM_OBJ_TILES + 0x1000 + 234 * 16, /* tiles 490+: art rows 32-39 (3-row) */
+    VRAM_OBJ_TILES + 0x1000 + 250 * 16, /* tiles 506+: art rows 40-47 (3-row) */
 };
 static u8 ambOn, ambType, ambFlip, ambCols; /* ambType = index into the sprite table */
 static u16 ambX, ambY;                       /* biased 9.7 fixed point */
@@ -97,6 +120,7 @@ static u16 ambCool;
 
 static void renderZeroState(void); /* defined at file end, after all statics */
 static void ambHideAll(void);      /* hide the ambient flyer's OAM slots 23-32 */
+static void rippleInit(void);      /* pre-fill HDMA table with zero-offset entries */
 
 void renderInit(void) {
     /* FastROM: tcc -F puts our code/tables in the $80+ bank mirrors; this
@@ -254,6 +278,7 @@ void renderGameLoad(void) {
 
     for (i = 0; i < 32 * 32; i++) mapBuf[i] = 0;
     for (i = 0; i < N_TRIANGLES; i++) triDisp[i] = 0xFF;
+    demoN = 0; /* WRAM is random at power-on; the demo list must start empty */
     mapRowLo = 0;
     mapRowHi = 31;
     mapDirty = 1;
@@ -262,9 +287,12 @@ void renderGameLoad(void) {
     REG_BGMODE = 0x09;  /* mode 1 + BG3 priority: HUD above everything */
     REG_SETINI = 0x04;  /* 239-line overscan: buys the board's lower position */
     mosVal = 0;
+    bg1Shift = 0;       /* play uses the canonical board position */
     videoMode = 0x17;   /* BG1 + BG2 + BG3 + OBJ */
     REG_TM = 0x17;
+    tmStage = 0;        /* drop any layer mask the how-to pages left staged */
     sceneMode = 0;
+    rippleInit();       /* pre-fill HDMA table with count=1, offset=0 entries */
     /* Screen stays force-blanked: the caller flushes the initial maps (free
      * DMA bandwidth while blanked), then calls setScreenOn(). */
 }
@@ -364,6 +392,33 @@ void ringRefresh(u8 k, u8 j) {
     }
 }
 
+/* How-to-play illustrations: hexes drawn with the real board renderer.
+ * Reset puts every triangle on DISP_HIDDEN and blanks whatever rings the
+ * previous page drew; Demo colors the ring around hinge (k,j) and refreshes
+ * just those cells - everything else stays tile 0 (backdrop shows through),
+ * no pins, no neighbor fragments. boardColor is never read (all triDisp
+ * set), so this works before any boardInit. Rings must not share triangles
+ * (vertices >= 2 apart); tiles shared ACROSS two rings are fine (dual-owner
+ * combos bake both colors). */
+void howtoHexReset(void) {
+    u8 i, t;
+    for (t = 0; t < N_TRIANGLES; t++) triDisp[t] = DISP_HIDDEN;
+    for (i = 0; i < demoN; i++) triRefresh(demoTris[i]);
+    demoN = 0;
+}
+
+void howtoHexDemo(u8 k, u8 j, u8 color) {
+    u8 i, t;
+    for (i = 0; i < 6; i++) {
+        u8 c = (u8)((s8)k + RING_DC[i]);
+        u8 r = (u8)((s8)j + RING_DR[i]);
+        t = triOfCell[r][c];
+        triDisp[t] = color;
+        triRefresh(t);
+        if (demoN < sizeof(demoTris)) demoTris[demoN++] = t;
+    }
+}
+
 /* All VRAM/CGRAM uploads + scroll asserts. Installed as the NMI hook
  * (nmiSet) so it runs at the VERY START of vblank: called after
  * WaitForVBlank it raced the vblank end, and on accurate hardware (bsnes)
@@ -393,14 +448,29 @@ void renderVBlank(void) {
         bgSetScroll(0, (u16)sx, (u16)(BOARD_VOFS + sy));
         shakeT--;
     } else {
-        bgSetScroll(0, 0, BOARD_VOFS); /* BOARD_PX_Y=76 */
+        bgSetScroll(0, 0, (u16)(BOARD_VOFS - bg1Shift)); /* BOARD_PX_Y=76 */
+    }
+    if (mosImpactT) {
+        mosVal = (u8)((u8)(mosVal * 2) / 3); /* geometric decay: ~×0.67/frame */
+        if (--mosImpactT == 0) mosVal = 0;
     }
     REG_MOSAIC = (u8)((mosVal << 4) | (mosVal ? 0x01 : 0)); /* board dissolve */
+    if (flashT) {
+        REG_CGWSEL = 0x00;
+        REG_CGADSUB = 0x03; /* add fixed color to BG1 + BG2 */
+        REG_COLDATA = (u8)(0xE0 | (u8)((u8)flashT * flashStep));
+        if (--flashT == 0) { REG_CGADSUB = 0x00; REG_COLDATA = 0xE0; }
+    }
     /* Seamless backdrop drifts down-left: 1px steps every 8/16 frames -
      * frequent enough to read as motion (slower hops looked choppy). */
     bg2X += 0x0020; /* 7.5 px/s */
     bg2Y -= 0x0010;
-    bgSetScroll(1, (u16)(bg2X >> 8) & 0xFF, (u16)(((bg2Y >> 8) - 1) & 0xFF));
+    {
+        s16 jy = (s16)(bg2Y >> 8) - 1 + bg2Jolt;
+        bgSetScroll(1, (u16)(bg2X >> 8) & 0xFF, (u16)(jy & 0xFF));
+        if (bg2Jolt > 0) bg2Jolt = (s8)(bg2Jolt > 2 ? bg2Jolt - 2 : 0);
+        else if (bg2Jolt < 0) bg2Jolt = (s8)(bg2Jolt < -2 ? bg2Jolt + 2 : 0);
+    }
     bgSetScroll(2, 0, 0x3F7);
     if (heatColorDirty) {
         dmaCopyCGram((u8 *)&heatColor, 31, 2);
@@ -433,9 +503,10 @@ void renderVBlank(void) {
                     (u16)((u16)(mapRowHi - mapRowLo + 1) << 6));
         mapDirty = 0;
     } else if (ambTileStep) {
-        u8 row = (u8)(4 - ambTileStep);
-        u8 *s = (u8 *)&ambient_pic + (u16)ambType * AMB_TILE_BYTES + (u16)row * 320;
-        dmaCopyVram(s, ambRowDest[row], 320);
+        u8 strip = ambTotalStrips - ambTileStep;
+        u16 nbytes = (strip < 4) ? 320 : 192;
+        u8 *s = (u8 *)&ambient_pic + (u16)ambType * AMB_TILE_BYTES + (u16)strip * 320;
+        dmaCopyVram(s, ambRowDest[strip], nbytes);
         ambTileStep--;
     } else if (hudDirty) {
         dmaCopyVram((u8 *)hudMap, VRAM_BG3_MAP, 0x800);
@@ -469,6 +540,19 @@ void renderVBlank(void) {
         for (i = 0; i < TWINKLE_N; i++)
             dmaCopyCGram((u8 *)&twBuf[i], (u16)(112 + twSlot[twSet][i]), 2);
         twDirty = 0;
+    }
+    /* HDMA channel 6: per-scanline BG1 H-scroll ripple. Re-write A1T + re-enable
+     * every vblank (hardware reloads A1T at active-display start from these regs).
+     * rippleFrame() (called in game loop) filled rippleBuf before this vblank. */
+    if (rippleT) {
+        HDMA6_CTRL  = 0x02;  /* mode 2: write 2 bytes to same B-bus reg per H-blank */
+        HDMA6_REG   = 0x0D;  /* B-bus reg $210D = BG1HOFS */
+        HDMA6_ADDRL = (u8)((u16)&rippleBuf[0]);
+        HDMA6_ADDRH = (u8)((u16)&rippleBuf[0] >> 8);
+        HDMA6_ADDRB = 0x7E;  /* WRAM bank */
+        REG_HDMAEN  = 0x40;  /* enable channel 6 */
+    } else {
+        REG_HDMAEN = 0x00;   /* no HDMA channels active */
     }
 }
 
@@ -601,6 +685,73 @@ void shakeStart(u8 amp, u8 frames) {
     shakeT = frames;
 }
 
+void renderHexImpact(u8 cascN, u8 cascDepth) {
+    u8 amp    = (u8)(cascDepth > 2 ? 3 : cascDepth > 1 ? 2 : 1);
+    u8 frames = (u8)(cascDepth > 2 ? 14 : cascDepth > 1 ? 10 : 6);
+    shakeStart(amp, frames);
+    bg2Jolt = (s8)(cascN > 1 ? -10 : -6);
+    /* Mosaic burst: big pixelation that geometrically decays to 0 */
+    if (mosVal == 0) {
+        mosVal    = (u8)(cascDepth > 2 ? 12 : cascDepth > 1 ? 10 : 8);
+        mosImpactT = 5;
+    }
+    /* White flash: 3-frame bright-to-dim via color math add */
+    flashStep = (u8)(cascN > 1 || cascDepth > 1 ? 9 : 7); /* ×3 = 27 or 21 max */
+    flashT    = 3;
+    /* HDMA shockwave ripple: expanding ring of per-scanline BG1 H-scroll offsets */
+    rippleT   = 10;
+    rippleRad = 0;
+}
+
+/* Pre-fill the HDMA table: all count=1 entries with 0-offset. rippleFrame()
+ * only updates the lo/hi bytes, so the count bytes never change after init. */
+static void rippleInit(void) {
+    u8 *p = rippleBuf;
+    u16 i;
+    for (i = 0; i < 239; i++, p += 3) {
+        p[0] = 1;  /* HDMA line count: apply to 1 scanline */
+        p[1] = 0;  /* BG1HOFS lo = 0 (no scroll) */
+        p[2] = 0;  /* BG1HOFS hi = 0 */
+    }
+    *p = 0; /* end-of-table marker */
+}
+
+/* Called once per game-loop frame (outside vblank). Fills rippleBuf with the
+ * current ring frame's per-scanline H-scroll offsets, then advances the ring.
+ * Rows above screen-center y=120 shift LEFT (positive scroll), rows below
+ * shift RIGHT (negative 10-bit scroll = 1024-n), creating an outward push. */
+void rippleFrame(void) {
+    u8 *p;
+    u8 amp, rad, y;
+    if (!rippleT) return;
+    amp = (u8)((rippleT + 1) >> 1); /* 5,5,4,4,3,3,2,2,1,1 over 10 frames */
+    rad = rippleRad;
+    p   = rippleBuf;
+    for (y = 0; y < 239; y++, p += 3) {
+        u8 dist = (y < 120) ? (u8)(120 - y) : (u8)(y - 120);
+        u8 lo = 0, hi = 0;
+        if (dist >= rad) {
+            u8 rd = dist - rad;
+            if (rd < 8) {
+                u8 av = (rd < amp) ? (u8)(amp - rd) : 0; /* taper to 0 at ring edge */
+                if (av) {
+                    if (y < 120) {
+                        lo = av;  /* positive scroll: content shifts left */
+                    } else {
+                        u16 sv = (u16)(1024 - (u16)av); /* negative 10-bit: shifts right */
+                        lo = (u8)(sv & 0xFF);
+                        hi = (u8)((sv >> 8) & 0x03);
+                    }
+                }
+            }
+        }
+        p[1] = lo;
+        p[2] = hi;
+    }
+    rippleT--;
+    rippleRad = (u8)(rippleRad + 6);
+}
+
 /* Shockwave pulses at up to 4 cleared hex centers: wave A fires at tick 0
  * (sprites 5..8) and an echo wave at tick PULSE_ECHO_AT (sprites 9..12).
  * 32x32, cursor palette; frame f's top-left tile is 416 + f*4. */
@@ -704,6 +855,7 @@ void sparksInit(void) {
  * Tables instead of (1 << ((s&3)<<1)): tcc variable shifts are lib calls. */
 static const u8 ambTopTileLow[5] = {130, 132, 134, 136, 138}; /* (386+2i)&0xFF */
 static const u8 ambBotTileLow[5] = {228, 230, 232, 234, 236}; /* (484+2i)&0xFF */
+static const u8 ambRow3TileLow[3] = {234, 236, 238};          /* (490+2i)&0xFF; 3-row sprites */
 static const u8 oamHiClr[4] = {0xFC, 0xF3, 0xCF, 0x3F}; /* ~(3 << (s&3)*2) */
 static const u8 oamHiX8[4] = {0x01, 0x04, 0x10, 0x40};  /*  1 << (s&3)*2  */
 
@@ -762,7 +914,9 @@ void ambientFrame(void) {
             u8 *src = (u8 *)&ambient_pic + AMB_PAL_OFF + (u16)ambType * AMB_PAL_BYTES;
             for (k = 0; k < 22; k++) ambPalBuf[k] = src[k];
             ambPalDirty = 1;
-            ambTileStep = 4; /* renderVBlank streams one tile row per vblank */
+            ambRows = ambSpriteRows[ambType];
+            ambTotalStrips = ambRows << 1;
+            ambTileStep = ambTotalStrips;
         }
         ambOn = 1;
         return;
@@ -782,30 +936,49 @@ void ambientFrame(void) {
         ambHideAll();
         return;
     }
-    /* No per-scanline suppression: one flyer (<=10 tiles/line) plus the spin
-     * cluster (~8) or a cascade's spread-out pulses (~8-12 on any one line),
-     * cursor and sparks all stay under the 34-tile cap, so it never needs to
-     * hide (hiding read as a flash during spins / hex clears). */
+    /* No per-scanline suppression: one flyer plus the spin cluster (~8),
+     * a cascade's spread-out pulses (~8-12 on any line), cursor and sparks
+     * all stay under the 34-tile cap (3-row sprite = 6 tiles/line). */
     sy = (u16)(by - AMB_BIAS);
-    /* up to 5 columns x 2 rows; RTL (flip=1) reverses the art columns. Show a
-     * column whenever its 16px span touches the screen: cx in [-15..255].
-     * cx>255 columns are hidden (the SNES can't show them on the right;
-     * they'd wrap). Direct oamMemory writes - see ambOamPut. */
+    /* RTL (flip=1) reverses art columns. Show a column when its 16px span
+     * touches the screen: cx in [-15..255]. cx>255 are hidden (the SNES
+     * can't show them right; they'd wrap). Direct oamMemory writes. */
     {
         s16 baseX = (s16)bx - AMB_BIAS;
         u8 attr = (u8)(ambFlip ? 0x61 : 0x21); /* prio 2, pal 0, tile bit8 */
-        for (i = 0; i < 5; i++) {
-            s16 cx = baseX + (s16)(i << 4);
-            u8 sTop = (u8)(23 + i);
-            u8 sBot = (u8)(28 + i);
-            if (i < ambCols && cx > -16 && cx <= 255) {
-                u8 neg = (cx < 0);
-                col = ambFlip ? (u8)(ambCols - 1 - i) : i;
-                ambOamPut(sTop, (u8)cx, (u8)sy, ambTopTileLow[col], attr, neg);
-                ambOamPut(sBot, (u8)cx, (u8)(sy + 16), ambBotTileLow[col], attr, neg);
-            } else {
-                ambOamHide(sTop);
-                ambOamHide(sBot);
+        if (ambRows == 3) {
+            /* 3-row sprite: up to 3 cols x 3 rows, OBJ slots 23-31 */
+            for (i = 0; i < 3; i++) {
+                s16 cx = baseX + (s16)(i << 4);
+                u8 s1 = (u8)(23 + i);
+                u8 s2 = (u8)(26 + i);
+                u8 s3 = (u8)(29 + i);
+                if (i < ambCols && cx > -16 && cx <= 255) {
+                    u8 neg = (cx < 0);
+                    col = ambFlip ? (u8)(ambCols - 1 - i) : i;
+                    ambOamPut(s1, (u8)cx, (u8)sy,        ambTopTileLow[col],  attr, neg);
+                    ambOamPut(s2, (u8)cx, (u8)(sy + 16), ambBotTileLow[col],  attr, neg);
+                    ambOamPut(s3, (u8)cx, (u8)(sy + 32), ambRow3TileLow[col], attr, neg);
+                } else {
+                    ambOamHide(s1); ambOamHide(s2); ambOamHide(s3);
+                }
+            }
+            ambOamHide(32);
+        } else {
+            /* 2-row sprite: up to 5 cols x 2 rows, OBJ slots 23-32 */
+            for (i = 0; i < 5; i++) {
+                s16 cx = baseX + (s16)(i << 4);
+                u8 sTop = (u8)(23 + i);
+                u8 sBot = (u8)(28 + i);
+                if (i < ambCols && cx > -16 && cx <= 255) {
+                    u8 neg = (cx < 0);
+                    col = ambFlip ? (u8)(ambCols - 1 - i) : i;
+                    ambOamPut(sTop, (u8)cx, (u8)sy,        ambTopTileLow[col], attr, neg);
+                    ambOamPut(sBot, (u8)cx, (u8)(sy + 16), ambBotTileLow[col], attr, neg);
+                } else {
+                    ambOamHide(sTop);
+                    ambOamHide(sBot);
+                }
             }
         }
     }
@@ -900,6 +1073,10 @@ void mosaicSet(u8 size) {
     mosVal = size;
 }
 
+void bg1ShiftSet(u8 px) {
+    bg1Shift = px;
+}
+
 /* Stage a main-screen layer mask (applied at the next vblank start, so the
  * switch never tears mid-frame). Stage transitions drop BG1 (0x16) while the
  * stats panel sits over the new backdrop - the dissolved board parked at
@@ -927,9 +1104,11 @@ void hudClear(void) {
 
 void hudText(u8 x, u8 y, const char *s) {
     u16 *p = &hudMap[(u16)y * 32 + x];
+    u8 c;
     while (*s) {
-        *p++ = (u16)(HUD_FONT_TILE + *s - 32) | HUD_ATTR;
-        s++;
+        c = (u8)*s++;
+        if (c >= 'a' && c <= 'z') c -= 32; /* font is ASCII 32..95: fold case */
+        *p++ = (u16)(HUD_FONT_TILE + c - 32) | HUD_ATTR;
     }
     hudDirty = 1;
 }
@@ -956,6 +1135,20 @@ void hudBarSet(u8 px) {
     full = px >> 3;
     rem = px & 7;
     for (col = 0; col < HUD_BAR_W; col++) {
+        u8 lvl = (col < full) ? 8 : (col == full ? rem : 0);
+        row[col] = (u16)(BAR_BASE + lvl) | HUD_ATTR;
+    }
+    hudDirty = 1;
+}
+
+/* Demo heat bar for the how-to pages: the live bar's tiles at an arbitrary
+ * map cell (hudBarSet is pinned to row 1 and caches barPx). */
+void hudBarDemo(u8 x, u8 y, u8 w, u8 px) {
+    u8 col, full, rem;
+    u16 *row = &hudMap[(u16)y * 32 + x];
+    full = px >> 3;
+    rem = px & 7;
+    for (col = 0; col < w; col++) {
         u8 lvl = (col < full) ? 8 : (col == full ? rem : 0);
         row[col] = (u16)(BAR_BASE + lvl) | HUD_ATTR;
     }
@@ -1182,12 +1375,20 @@ static void renderZeroState(void) {
     for (i = 0; i < SPARK_N; i++) spkOn[i] = 0;
     ambOn = 0;
     ambType = 0;
+    ambRows = 0;
+    ambTotalStrips = 0;
     ambPalDirty = 0;
     ambTileStep = 0;
     tmStage = 0;
     ambCool = 60;
     bg2X = 0;
     bg2Y = 0;
+    bg2Jolt = 0;
+    mosImpactT = 0;
+    flashT     = 0;
+    flashStep  = 0;
+    rippleT    = 0;
+    rippleRad  = 0;
     barPx = 0xFF;
     cursorHidden = 0;
     sceneMode = 0;

@@ -84,6 +84,8 @@ void spinAnimEnd(void);
  * (DISP_WHITE / DISP_HIDDEN / 0xFF = its board color); rebuild after edits. */
 extern u8 triDisp[];
 void shakeStart(u8 amp, u8 frames);
+void renderHexImpact(u8 cascN, u8 cascDepth);
+void rippleFrame(void); /* advance HDMA shockwave ring one frame (call in game loop) */
 void pulseStart(u8 n, const u8 *ks, const u8 *js);
 void pulseTick(u8 tick);
 void pulseEnd(void);
@@ -124,5 +126,11 @@ void mosaicSet(u8 size);     /* BG1 mosaic 0..15, applied in vblank */
 void layersSet(u8 tm);       /* main-screen TM mask, applied in vblank */
 void hudDigits(u8 x, u8 y, const u8 *d, u8 n); /* BCD digits, MSB first */
 void hudBox(u8 x, u8 y, u8 w, u8 h); /* 1px-bordered panel ring */
+
+/* How-to-play illustrations. */
+void howtoHexReset(void); /* hide all triangles + blank previous demo rings */
+void howtoHexDemo(u8 k, u8 j, u8 color); /* draw a hex ring at hinge (k,j) */
+void hudBarDemo(u8 x, u8 y, u8 w, u8 px); /* heat-bar tiles at any map cell */
+void bg1ShiftSet(u8 px); /* shift BG1 down (applied per vblank; 0 in play) */
 
 #endif

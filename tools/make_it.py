@@ -59,12 +59,14 @@ _VOL_ENV = [(64, 0), (64, 2), (0, 8)]
 _VOL_SUS = 1                          # sustain-loop node (hold here while keyed)
 
 
-def _it_instrument(name, sample_num):
+def _it_instrument(name, sample_num, decay_ticks=None):
     """One 554-byte IT instrument mapping every key to `sample_num`.
 
-    snesmod's module player needs instruments (sample-mode .it files are
-    silent). Settings mirror overworld.it (NNA=note-off, fadeout, sustaining
-    volume envelope) so playback behaves like a known-good module."""
+    decay_ticks=None  -> sustain-hold envelope (pads, bass): hold at full
+                         volume while keyed, quick release on note-off.
+    decay_ticks=N     -> decay envelope (piano, bells): attack to full at
+                         tick 0, fade to 0 by tick N, no sustain hold.
+                         The note fades naturally regardless of key duration."""
     h = bytearray(554)
     h[0:4] = b'IMPI'
     nm = name.encode('ascii', 'ignore')[:12].ljust(12, b'\x00')
@@ -90,11 +92,19 @@ def _it_instrument(name, sample_num):
         h[0x41 + k * 2] = sample_num & 0xFF
     # volume envelope at 0x130
     env = bytearray(82)
-    env[0] = 0x05                          # on + sustain loop
-    env[1] = len(_VOL_ENV)                 # node count
-    env[2] = 0; env[3] = 0                 # loop begin/end
-    env[4] = _VOL_SUS; env[5] = _VOL_SUS   # sustain loop begin/end (hold node)
-    for k, (y, tick) in enumerate(_VOL_ENV):
+    if decay_ticks is None:
+        # Sustain-hold: instant attack, hold at full while keyed, quick release
+        nodes = _VOL_ENV
+        env[0] = 0x05                        # on + sustain loop
+        env[4] = _VOL_SUS; env[5] = _VOL_SUS
+    else:
+        # Decay: instant attack to full, linear fade to 0, no sustain hold
+        nodes = [(64, 0), (0, decay_ticks)]
+        env[0] = 0x01                        # on, no sustain loop
+        env[4] = 0; env[5] = 0
+    env[1] = len(nodes)
+    env[2] = 0; env[3] = 0
+    for k, (y, tick) in enumerate(nodes):
         env[6 + k * 3] = y & 0xFF
         struct.pack_into('<H', env, 7 + k * 3, tick)
     h[0x130:0x130+82] = env
@@ -177,7 +187,7 @@ def write_it(path, songname, samples, patterns=None, orders=None,
         buf += struct.pack('<I', o)
     # instrument blocks (instrument i maps the whole keyboard to sample i+1)
     for i, s in enumerate(samples):
-        buf += _it_instrument(s['name'], i + 1)
+        buf += _it_instrument(s['name'], i + 1, decay_ticks=s.get('decay'))
     # sample headers
     for i, s in enumerate(samples):
         pcm = np.asarray(s['pcm'], dtype=np.int16)
